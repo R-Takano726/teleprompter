@@ -237,6 +237,29 @@
       height: 0.6em;
     }
 
+    /* Markdown list items */
+    #prompterContent .li-ul,
+    #prompterContent .li-ol {
+      display: block;
+      padding-left: 1.8em;
+      position: relative;
+    }
+
+    #prompterContent .li-marker {
+      position: absolute;
+      left: 0;
+    }
+
+    #prompterContent .li-ul .li-marker {
+      color: #4fc3f7;
+    }
+
+    #prompterContent .li-ol .li-marker {
+      color: #ffb74d;
+      min-width: 1.6em;
+      display: inline-block;
+    }
+
     /* ==================== Prompter Controls ==================== */
     #prompterControls {
       background: rgba(10, 10, 20, 0.95);
@@ -335,7 +358,7 @@
 
     <textarea
       id="scriptInput"
-      placeholder="台本をここに貼り付けてください...&#10;&#10;Markdown形式の見出しに対応しています:&#10;# 大見出し (黄色)&#10;## 中見出し (水色)&#10;### 小見出し (緑色)"
+      placeholder="台本をここに貼り付けてください...&#10;&#10;Markdown形式に対応しています:&#10;# 大見出し (黄色)&#10;## 中見出し (水色)&#10;### 小見出し (緑色)&#10;- 箇条書き (水色の•)&#10;1. 番号付きリスト (オレンジの番号)"
     ></textarea>
 
     <div class="settings-row">
@@ -468,6 +491,19 @@
           return `<span class="h2">${applyInline(line.slice(3))}</span>`;
         } else if (/^# /.test(line)) {
           return `<span class="h1">${applyInline(line.slice(2))}</span>`;
+        } else if (/^(\s*)[*-] /.test(line)) {
+          const match = line.match(/^(\s*)[*-] (.*)/);
+          const indent = match[1].length;
+          const content = match[2];
+          const extraIndent = indent > 0 ? ` style="padding-left:${1.8 + indent * 0.8}em"` : '';
+          return `<span class="li-ul"${extraIndent}><span class="li-marker">•</span>${applyInline(content)}</span>`;
+        } else if (/^\s*\d+\. /.test(line)) {
+          const match = line.match(/^(\s*)(\d+)\. (.*)/);
+          const indent = match[1].length;
+          const num = match[2];
+          const content = match[3];
+          const extraIndent = indent > 0 ? ` style="padding-left:${1.8 + indent * 0.8}em"` : '';
+          return `<span class="li-ol"${extraIndent}><span class="li-marker">${escapeHtml(num)}.</span>${applyInline(content)}</span>`;
         } else if (line.trim() === '') {
           return `<span class="empty-line"></span>`;
         } else {
