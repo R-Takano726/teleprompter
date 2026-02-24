@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>プロンプター</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Noto Sans JP', 'Yu Gothic', sans-serif;
+      background: #0f0f1a;
+      color: #e0e0e0;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* ==================== Edit Screen ==================== */
+    #editScreen {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      padding: 20px;
+      gap: 14px;
+    }
+
+    #editScreen h1 {
+      text-align: center;
+      font-size: 22px;
+      font-weight: bold;
+      color: #4fc3f7;
+      letter-spacing: 4px;
+    }
+
+    #scriptInput {
+      flex: 1;
+      background: #080812;
+      color: #e8e8e8;
+      border: 1px solid #2a2a4a;
+      border-radius: 10px;
+      padding: 16px;
+      font-size: 15px;
+      line-height: 1.7;
+      resize: none;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    #scriptInput:focus {
+      border-color: #4fc3f7;
+    }
+
+    #scriptInput::placeholder {
+      color: #444;
+    }
+
+    .settings-row {
+      display: flex;
+      gap: 20px;
+      align-items: flex-end;
+      flex-wrap: wrap;
+    }
+
+    .setting-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .setting-group label {
+      font-size: 12px;
+      color: #888;
+      letter-spacing: 1px;
+    }
+
+    .setting-group .val {
+      color: #4fc3f7;
+      font-weight: bold;
+    }
+
+    input[type="range"] {
+      width: 130px;
+      accent-color: #4fc3f7;
+      cursor: pointer;
+    }
+
+    .mirror-row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .mirror-row span {
+      font-size: 12px;
+      color: #888;
+      margin-right: 4px;
+      letter-spacing: 1px;
+    }
+
+    .toggle-btn {
+      padding: 7px 16px;
+      border: 1px solid #3a3a5a;
+      border-radius: 6px;
+      background: transparent;
+      color: #aaa;
+      cursor: pointer;
+      font-size: 13px;
+      font-family: inherit;
+      transition: all 0.15s;
+    }
+
+    .toggle-btn:hover {
+      border-color: #4fc3f7;
+      color: #4fc3f7;
+    }
+
+    .toggle-btn.active {
+      background: #4fc3f7;
+      color: #000;
+      border-color: #4fc3f7;
+      font-weight: bold;
+    }
+
+    #startBtn {
+      align-self: center;
+      padding: 14px 48px;
+      background: linear-gradient(135deg, #4fc3f7, #0288d1);
+      color: #000;
+      border: none;
+      border-radius: 10px;
+      font-size: 17px;
+      font-weight: bold;
+      cursor: pointer;
+      font-family: inherit;
+      letter-spacing: 2px;
+      transition: opacity 0.2s, transform 0.1s;
+      box-shadow: 0 4px 20px rgba(79, 195, 247, 0.3);
+    }
+
+    #startBtn:hover {
+      opacity: 0.9;
+      transform: translateY(-1px);
+    }
+
+    #startBtn:active {
+      transform: translateY(0);
+    }
+
+    /* ==================== Prompter Screen ==================== */
+    #prompterScreen {
+      display: none;
+      flex-direction: column;
+      height: 100vh;
+      background: #000;
+      position: relative;
+    }
+
+    #prompterWrapper {
+      flex: 1;
+      overflow: scroll;
+      position: relative;
+      scrollbar-width: none;
+    }
+
+    #prompterWrapper::-webkit-scrollbar {
+      display: none;
+    }
+
+    /* Reading line indicator */
+    #prompterWrapper::after {
+      content: '';
+      position: fixed;
+      left: 0;
+      right: 0;
+      top: 38%;
+      height: 2px;
+      background: rgba(79, 195, 247, 0.15);
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    #prompterContent {
+      padding: 30vh 5% 80vh;
+      font-size: 32px;
+      line-height: 1.9;
+      color: #fff;
+      width: 100%;
+      word-break: break-word;
+      overflow-wrap: break-word;
+      white-space: pre-wrap;
+    }
+
+    #prompterContent.mirror-h {
+      transform: scaleX(-1);
+    }
+
+    #prompterContent.mirror-v {
+      transform: scaleY(-1);
+    }
+
+    #prompterContent.mirror-h.mirror-v {
+      transform: scale(-1, -1);
+    }
+
+    /* Markdown heading colors */
+    #prompterContent .h1 {
+      color: #ffeb3b;
+      font-weight: bold;
+      font-size: 1.4em;
+      margin: 0.4em 0 0.2em;
+      display: block;
+    }
+
+    #prompterContent .h2 {
+      color: #4fc3f7;
+      font-weight: bold;
+      font-size: 1.2em;
+      margin: 0.3em 0 0.1em;
+      display: block;
+    }
+
+    #prompterContent .h3 {
+      color: #a5d6a7;
+      font-weight: bold;
+      font-size: 1.05em;
+      margin: 0.2em 0 0.1em;
+      display: block;
+    }
+
+    #prompterContent .empty-line {
+      display: block;
+      height: 0.6em;
+    }
+
+    /* ==================== Prompter Controls ==================== */
+    #prompterControls {
+      background: rgba(10, 10, 20, 0.95);
+      border-top: 1px solid #222;
+      padding: 10px 16px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+      flex-shrink: 0;
+      backdrop-filter: blur(10px);
+    }
+
+    .ctrl-btn {
+      padding: 7px 14px;
+      border: 1px solid #333;
+      border-radius: 6px;
+      background: #111;
+      color: #ccc;
+      cursor: pointer;
+      font-size: 13px;
+      font-family: inherit;
+      transition: all 0.15s;
+      white-space: nowrap;
+    }
+
+    .ctrl-btn:hover {
+      background: #222;
+      border-color: #555;
+    }
+
+    #playBtn {
+      background: #1a3a1a;
+      color: #a5d6a7;
+      border-color: #2d5a2d;
+      font-weight: bold;
+      min-width: 90px;
+    }
+
+    #playBtn:hover {
+      background: #224a22;
+    }
+
+    #stopBtn {
+      color: #ef9a9a;
+      border-color: #3a1a1a;
+    }
+
+    .ctrl-group {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .ctrl-group-label {
+      font-size: 11px;
+      color: #555;
+      margin-right: 2px;
+    }
+
+    .ctrl-val {
+      color: #4fc3f7;
+      font-size: 13px;
+      font-weight: bold;
+      min-width: 24px;
+      text-align: center;
+    }
+
+    .separator {
+      width: 1px;
+      height: 24px;
+      background: #333;
+      margin: 0 4px;
+    }
+
+    .shortcut-hint {
+      font-size: 11px;
+      color: #444;
+      margin-left: auto;
+      letter-spacing: 0.5px;
+      white-space: nowrap;
+    }
+
+    @media (max-width: 600px) {
+      .shortcut-hint {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ==================== Edit Screen ==================== -->
+  <div id="editScreen">
+    <h1>TELEPROMPTER</h1>
+
+    <textarea
+      id="scriptInput"
+      placeholder="台本をここに貼り付けてください...&#10;&#10;Markdown形式の見出しに対応しています:&#10;# 大見出し (黄色)&#10;## 中見出し (水色)&#10;### 小見出し (緑色)"
+    ></textarea>
+
+    <div class="settings-row">
+      <div class="setting-group">
+        <label>スクロール速度: <span class="val" id="speedVal">2</span></label>
+        <input type="range" id="speedRange" min="1" max="20" value="2">
+      </div>
+      <div class="setting-group">
+        <label>フォントサイズ: <span class="val" id="fontVal">72</span> px</label>
+        <input type="range" id="fontRange" min="16" max="80" value="72">
+      </div>
+      <div class="setting-group">
+        <label>反転オプション</label>
+        <div class="mirror-row">
+          <span>反転:</span>
+          <button class="toggle-btn active" id="mirrorHBtn">左右</button>
+          <button class="toggle-btn" id="mirrorVBtn">上下</button>
+        </div>
+      </div>
+    </div>
+
+    <button id="startBtn">▶ プロンプター開始</button>
+  </div>
+
+  <!-- ==================== Prompter Screen ==================== -->
+  <div id="prompterScreen">
+    <div id="prompterWrapper">
+      <div id="prompterContent"></div>
+    </div>
+
+    <div id="prompterControls">
+      <button class="ctrl-btn" id="stopBtn">✕ 終了</button>
+
+      <div class="separator"></div>
+
+      <button class="ctrl-btn" id="playBtn">⏸ 一時停止</button>
+
+      <button class="ctrl-btn" id="rewindBtn">⏪ 戻る</button>
+      <button class="ctrl-btn" id="forwardBtn">進む ⏩</button>
+
+      <div class="separator"></div>
+
+      <div class="ctrl-group">
+        <span class="ctrl-group-label">速度</span>
+        <button class="ctrl-btn" id="speedDownBtn">−</button>
+        <span class="ctrl-val" id="speedDisplay">5</span>
+        <button class="ctrl-btn" id="speedUpBtn">＋</button>
+      </div>
+
+      <div class="ctrl-group">
+        <span class="ctrl-group-label">サイズ</span>
+        <button class="ctrl-btn" id="fontDownBtn">A−</button>
+        <span class="ctrl-val" id="fontDisplay">32</span>
+        <button class="ctrl-btn" id="fontUpBtn">A＋</button>
+      </div>
+
+      <div class="separator"></div>
+
+      <div class="ctrl-group">
+        <span class="ctrl-group-label">反転</span>
+        <button class="toggle-btn active" id="pMirrorHBtn">左右</button>
+        <button class="toggle-btn" id="pMirrorVBtn">上下</button>
+      </div>
+
+      <span class="shortcut-hint">
+        スペース: 一時停止 &nbsp;|&nbsp; ←→ / ↑↓: 移動 &nbsp;|&nbsp; +−: 速度 &nbsp;|&nbsp; ホイール: スクロール
+      </span>
+    </div>
+  </div>
+
+  <script>
+    // ==================== State ====================
+    let isPlaying = false;
+    let speed = 2;
+    let fontSize = 72;
+    let mirrorH = true;
+    let mirrorV = false;
+    let scrollPos = 0;
+    let lastTime = null;
+    let rafId = null;
+
+    const STEP_AMOUNT = 300; // pixels per rewind/forward step
+
+    // ==================== Elements ====================
+    const editScreen    = document.getElementById('editScreen');
+    const prompterScreen  = document.getElementById('prompterScreen');
+    const scriptInput   = document.getElementById('scriptInput');
+    const prompterWrapper = document.getElementById('prompterWrapper');
+    const prompterContent = document.getElementById('prompterContent');
+
+    const speedRange = document.getElementById('speedRange');
+    const fontRange  = document.getElementById('fontRange');
+    const speedVal   = document.getElementById('speedVal');
+    const fontVal    = document.getElementById('fontVal');
+    const mirrorHBtn = document.getElementById('mirrorHBtn');
+    const mirrorVBtn = document.getElementById('mirrorVBtn');
+    const startBtn   = document.getElementById('startBtn');
+
+    const stopBtn       = document.getElementById('stopBtn');
+    const playBtn       = document.getElementById('playBtn');
+    const rewindBtn     = document.getElementById('rewindBtn');
+    const forwardBtn    = document.getElementById('forwardBtn');
+    const speedDownBtn  = document.getElementById('speedDownBtn');
+    const speedUpBtn    = document.getElementById('speedUpBtn');
+    const fontDownBtn   = document.getElementById('fontDownBtn');
+    const fontUpBtn     = document.getElementById('fontUpBtn');
+    const speedDisplay  = document.getElementById('speedDisplay');
+    const fontDisplay   = document.getElementById('fontDisplay');
+    const pMirrorHBtn   = document.getElementById('pMirrorHBtn');
+    const pMirrorVBtn   = document.getElementById('pMirrorVBtn');
+
+    // ==================== Markdown Parser ====================
+    function escapeHtml(text) {
+      return text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    }
+
+    function applyInline(text) {
+      return escapeHtml(text).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    }
+
+    function parseMarkdown(text) {
+      const lines = text.split('\n');
+      return lines.map(line => {
+        if (/^### /.test(line)) {
+          return `<span class="h3">${applyInline(line.slice(4))}</span>`;
+        } else if (/^## /.test(line)) {
+          return `<span class="h2">${applyInline(line.slice(3))}</span>`;
+        } else if (/^# /.test(line)) {
+          return `<span class="h1">${applyInline(line.slice(2))}</span>`;
+        } else if (line.trim() === '') {
+          return `<span class="empty-line"></span>`;
+        } else {
+          return `<span>${applyInline(line)}</span>`;
+        }
+      }).join('\n');
+    }
+
+    // ==================== Mirror ====================
+    function applyMirror() {
+      prompterContent.classList.toggle('mirror-h', mirrorH);
+      prompterContent.classList.toggle('mirror-v', mirrorV);
+      pMirrorHBtn.classList.toggle('active', mirrorH);
+      pMirrorVBtn.classList.toggle('active', mirrorV);
+    }
+
+    // ==================== Edit Screen Controls ====================
+    speedRange.addEventListener('input', () => {
+      speed = parseInt(speedRange.value);
+      speedVal.textContent = speed;
+    });
+
+    fontRange.addEventListener('input', () => {
+      fontSize = parseInt(fontRange.value);
+      fontVal.textContent = fontSize;
+    });
+
+    mirrorHBtn.addEventListener('click', () => {
+      mirrorH = !mirrorH;
+      mirrorHBtn.classList.toggle('active', mirrorH);
+    });
+
+    mirrorVBtn.addEventListener('click', () => {
+      mirrorV = !mirrorV;
+      mirrorVBtn.classList.toggle('active', mirrorV);
+    });
+
+    startBtn.addEventListener('click', () => {
+      const text = scriptInput.value.trim();
+      if (!text) {
+        scriptInput.focus();
+        scriptInput.style.borderColor = '#ef5350';
+        setTimeout(() => { scriptInput.style.borderColor = ''; }, 800);
+        return;
+      }
+
+      // Render
+      prompterContent.innerHTML = parseMarkdown(text);
+      prompterContent.style.fontSize = fontSize + 'px';
+      applyMirror();
+
+      // Switch screens
+      editScreen.style.display = 'none';
+      prompterScreen.style.display = 'flex';
+
+      // Reset
+      scrollPos = 0;
+      prompterWrapper.scrollTop = 0;
+
+      // Start
+      isPlaying = true;
+      updatePlayBtn();
+      updateSpeedDisplay();
+      updateFontDisplay();
+      startAnimation();
+    });
+
+    // ==================== Animation Loop ====================
+    function startAnimation() {
+      if (rafId) cancelAnimationFrame(rafId);
+      lastTime = null;
+
+      function animate(timestamp) {
+        if (lastTime === null) lastTime = timestamp;
+        const delta = timestamp - lastTime;
+        lastTime = timestamp;
+
+        if (isPlaying) {
+          // speed 1-20 → 15-300 px/sec
+          const pxPerSec = speed * 15;
+          scrollPos += pxPerSec * delta / 1000;
+
+          const maxScroll = prompterWrapper.scrollHeight - prompterWrapper.clientHeight;
+          if (scrollPos >= maxScroll) {
+            scrollPos = maxScroll;
+            isPlaying = false;
+            updatePlayBtn();
+          }
+
+          prompterWrapper.scrollTop = scrollPos;
+        }
+
+        rafId = requestAnimationFrame(animate);
+      }
+
+      rafId = requestAnimationFrame(animate);
+    }
+
+    // ==================== Prompter Controls ====================
+    stopBtn.addEventListener('click', () => {
+      if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+      isPlaying = false;
+      editScreen.style.display = 'flex';
+      prompterScreen.style.display = 'none';
+    });
+
+    playBtn.addEventListener('click', togglePlay);
+
+    function togglePlay() {
+      isPlaying = !isPlaying;
+      updatePlayBtn();
+      if (isPlaying && !rafId) startAnimation();
+    }
+
+    function updatePlayBtn() {
+      playBtn.textContent = isPlaying ? '⏸ 一時停止' : '▶ 再生';
+    }
+
+    rewindBtn.addEventListener('click', () => {
+      scrollPos = Math.max(0, scrollPos - STEP_AMOUNT);
+      prompterWrapper.scrollTop = scrollPos;
+    });
+
+    forwardBtn.addEventListener('click', () => {
+      const max = prompterWrapper.scrollHeight - prompterWrapper.clientHeight;
+      scrollPos = Math.min(max, scrollPos + STEP_AMOUNT);
+      prompterWrapper.scrollTop = scrollPos;
+    });
+
+    function updateSpeedDisplay() { speedDisplay.textContent = speed; }
+    function updateFontDisplay()  { fontDisplay.textContent = fontSize; }
+
+    speedDownBtn.addEventListener('click', () => {
+      speed = Math.max(1, speed - 1);
+      updateSpeedDisplay();
+    });
+    speedUpBtn.addEventListener('click', () => {
+      speed = Math.min(20, speed + 1);
+      updateSpeedDisplay();
+    });
+
+    fontDownBtn.addEventListener('click', () => {
+      fontSize = Math.max(16, fontSize - 4);
+      prompterContent.style.fontSize = fontSize + 'px';
+      updateFontDisplay();
+    });
+    fontUpBtn.addEventListener('click', () => {
+      fontSize = Math.min(80, fontSize + 4);
+      prompterContent.style.fontSize = fontSize + 'px';
+      updateFontDisplay();
+    });
+
+    pMirrorHBtn.addEventListener('click', () => { mirrorH = !mirrorH; applyMirror(); });
+    pMirrorVBtn.addEventListener('click', () => { mirrorV = !mirrorV; applyMirror(); });
+
+    // ==================== Mouse Wheel ====================
+    prompterWrapper.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      scrollPos += e.deltaY;
+      scrollPos = Math.max(0, scrollPos);
+      const max = prompterWrapper.scrollHeight - prompterWrapper.clientHeight;
+      scrollPos = Math.min(max, scrollPos);
+      prompterWrapper.scrollTop = scrollPos;
+    }, { passive: false });
+
+    // ==================== Touch (tablet swipe) ====================
+    let touchStartY = 0;
+    prompterWrapper.addEventListener('touchstart', (e) => {
+      touchStartY = e.touches[0].clientY;
+    }, { passive: true });
+
+    prompterWrapper.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+      const dy = touchStartY - e.touches[0].clientY;
+      scrollPos += dy * 1.5;
+      scrollPos = Math.max(0, scrollPos);
+      const max = prompterWrapper.scrollHeight - prompterWrapper.clientHeight;
+      scrollPos = Math.min(max, scrollPos);
+      prompterWrapper.scrollTop = scrollPos;
+      touchStartY = e.touches[0].clientY;
+    }, { passive: false });
+
+    // ==================== Keyboard Shortcuts ====================
+    document.addEventListener('keydown', (e) => {
+      if (prompterScreen.style.display === 'none') return;
+
+      switch (e.key) {
+        case ' ':
+          e.preventDefault();
+          togglePlay();
+          break;
+
+        case 'ArrowLeft':
+        case 'ArrowUp':
+          e.preventDefault();
+          scrollPos = Math.max(0, scrollPos - STEP_AMOUNT);
+          prompterWrapper.scrollTop = scrollPos;
+          break;
+
+        case 'ArrowRight':
+        case 'ArrowDown':
+          e.preventDefault();
+          {
+            const max = prompterWrapper.scrollHeight - prompterWrapper.clientHeight;
+            scrollPos = Math.min(max, scrollPos + STEP_AMOUNT);
+            prompterWrapper.scrollTop = scrollPos;
+          }
+          break;
+
+        case '+':
+        case '=':
+          speed = Math.min(20, speed + 1);
+          updateSpeedDisplay();
+          break;
+
+        case '-':
+        case '_':
+          speed = Math.max(1, speed - 1);
+          updateSpeedDisplay();
+          break;
+      }
+    });
+  </script>
+</body>
+</html>
