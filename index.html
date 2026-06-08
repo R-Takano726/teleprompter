@@ -171,23 +171,10 @@
       display: none;
     }
 
-    /* Reading line indicator */
-    #prompterWrapper::after {
-      content: '';
-      position: fixed;
-      left: 0;
-      right: 0;
-      top: 38%;
-      height: 2px;
-      background: rgba(79, 195, 247, 0.15);
-      pointer-events: none;
-      z-index: 10;
-    }
-
     #prompterContent {
       padding: 30vh 5% 80vh;
       font-size: 32px;
-      line-height: 1.9;
+      line-height: 1.6;
       color: #fff;
       width: 100%;
       word-break: break-word;
@@ -195,46 +182,44 @@
       white-space: pre-wrap;
     }
 
+    /* 左右反転: レイアウト全体を鏡映 (ビームスプリッタ用) */
     #prompterContent.mirror-h {
       transform: scaleX(-1);
     }
 
-    #prompterContent.mirror-v {
+    /* 上下反転: 行の順序・スクロールはそのまま、各行の文字だけ上下反転 */
+    #prompterContent.mirror-v .line {
       transform: scaleY(-1);
-    }
-
-    #prompterContent.mirror-h.mirror-v {
-      transform: scale(-1, -1);
     }
 
     /* Markdown heading colors */
     #prompterContent .h1 {
       color: #ffeb3b;
       font-weight: bold;
-      font-size: 1.4em;
-      margin: 0.4em 0 0.2em;
+      font-size: 1.2em;
+      margin: 0.2em 0 0.1em;
       display: block;
     }
 
     #prompterContent .h2 {
       color: #4fc3f7;
       font-weight: bold;
-      font-size: 1.2em;
-      margin: 0.3em 0 0.1em;
+      font-size: 1.1em;
+      margin: 0.15em 0 0.05em;
       display: block;
     }
 
     #prompterContent .h3 {
       color: #a5d6a7;
       font-weight: bold;
-      font-size: 1.05em;
-      margin: 0.2em 0 0.1em;
+      font-size: 1.0em;
+      margin: 0.1em 0 0.05em;
       display: block;
     }
 
     #prompterContent .empty-line {
       display: block;
-      height: 0.6em;
+      height: 0.4em;
     }
 
     /* Markdown list items */
@@ -367,8 +352,8 @@
         <input type="range" id="speedRange" min="1" max="20" value="2">
       </div>
       <div class="setting-group">
-        <label>フォントサイズ: <span class="val" id="fontVal">72</span> px</label>
-        <input type="range" id="fontRange" min="16" max="80" value="72">
+        <label>フォントサイズ: <span class="val" id="fontVal">60</span> px</label>
+        <input type="range" id="fontRange" min="16" max="80" value="60">
       </div>
       <div class="setting-group">
         <label>反転オプション</label>
@@ -411,7 +396,7 @@
       <div class="ctrl-group">
         <span class="ctrl-group-label">サイズ</span>
         <button class="ctrl-btn" id="fontDownBtn">A−</button>
-        <span class="ctrl-val" id="fontDisplay">32</span>
+        <span class="ctrl-val" id="fontDisplay">60</span>
         <button class="ctrl-btn" id="fontUpBtn">A＋</button>
       </div>
 
@@ -423,6 +408,10 @@
         <button class="toggle-btn" id="pMirrorVBtn">上下</button>
       </div>
 
+      <div class="separator"></div>
+
+      <button class="toggle-btn" id="voiceBtn" title="喋ったペースに合わせて自動でスクロール">🎤 音声追従</button>
+
       <span class="shortcut-hint">
         スペース: 一時停止 &nbsp;|&nbsp; ←→ / ↑↓: 移動 &nbsp;|&nbsp; +−: 速度 &nbsp;|&nbsp; ホイール: スクロール
       </span>
@@ -433,7 +422,7 @@
     // ==================== State ====================
     let isPlaying = false;
     let speed = 2;
-    let fontSize = 72;
+    let fontSize = 60;
     let mirrorH = true;
     let mirrorV = false;
     let scrollPos = 0;
@@ -441,6 +430,22 @@
     let rafId = null;
 
     const STEP_AMOUNT = 300; // pixels per rewind/forward step
+
+    // ==================== Voice-follow State ====================
+    let voiceMode = false;      // 音声追従ON/OFF
+    let voiceWantOn = false;    // 自動再開の意図フラグ
+    let voiceTarget = null;     // 追従先スクロール位置(px)。nullなら停止
+    let voiceNorm = '';         // 台本を正規化した連結文字列
+    let voiceLineRanges = [];   // [{start, end, el}] norm内の各行範囲→DOM
+    let voiceIndex = 0;         // 現在読んでいるnorm内位置
+    let recognition = null;
+    let recognitionRunning = false;
+    let recognitionStarting = false; // start()〜onstart の間
+    let restartTimer = null;    // onend後の再開タイマー
+    let lastVoiceProc = 0;      // 認識結果の処理スロットル用
+    let lastManualAnchorAt = 0; // 手動補正直後は音声更新を少し無視する
+    const VOICE_EASE = 4;       // 追従のなめらかさ(大きいほど速く追従)
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
     // ==================== Elements ====================
     const editScreen    = document.getElementById('editScreen');
@@ -469,6 +474,7 @@
     const fontDisplay   = document.getElementById('fontDisplay');
     const pMirrorHBtn   = document.getElementById('pMirrorHBtn');
     const pMirrorVBtn   = document.getElementById('pMirrorVBtn');
+    const voiceBtn      = document.getElementById('voiceBtn');
 
     // ==================== Markdown Parser ====================
     function escapeHtml(text) {
@@ -484,32 +490,34 @@
 
     function parseMarkdown(text) {
       const lines = text.split('\n');
+      // 各行を block 要素(.line)にする。上下反転は .line ごとに scaleY(-1) するため、
+      // 行順とスクロール挙動を保ったまま「文字だけ上下反転」を実現できる。
       return lines.map(line => {
         if (/^### /.test(line)) {
-          return `<span class="h3">${applyInline(line.slice(4))}</span>`;
+          return `<div class="line h3">${applyInline(line.slice(4))}</div>`;
         } else if (/^## /.test(line)) {
-          return `<span class="h2">${applyInline(line.slice(3))}</span>`;
+          return `<div class="line h2">${applyInline(line.slice(3))}</div>`;
         } else if (/^# /.test(line)) {
-          return `<span class="h1">${applyInline(line.slice(2))}</span>`;
+          return `<div class="line h1">${applyInline(line.slice(2))}</div>`;
         } else if (/^(\s*)[*-] /.test(line)) {
           const match = line.match(/^(\s*)[*-] (.*)/);
           const indent = match[1].length;
           const content = match[2];
           const extraIndent = indent > 0 ? ` style="padding-left:${1.8 + indent * 0.8}em"` : '';
-          return `<span class="li-ul"${extraIndent}><span class="li-marker">•</span>${applyInline(content)}</span>`;
+          return `<div class="line li-ul"${extraIndent}><span class="li-marker">•</span>${applyInline(content)}</div>`;
         } else if (/^\s*\d+\. /.test(line)) {
           const match = line.match(/^(\s*)(\d+)\. (.*)/);
           const indent = match[1].length;
           const num = match[2];
           const content = match[3];
           const extraIndent = indent > 0 ? ` style="padding-left:${1.8 + indent * 0.8}em"` : '';
-          return `<span class="li-ol"${extraIndent}><span class="li-marker">${escapeHtml(num)}.</span>${applyInline(content)}</span>`;
+          return `<div class="line li-ol"${extraIndent}><span class="li-marker">${escapeHtml(num)}.</span>${applyInline(content)}</div>`;
         } else if (line.trim() === '') {
-          return `<span class="empty-line"></span>`;
+          return `<div class="line empty-line"></div>`;
         } else {
-          return `<span>${applyInline(line)}</span>`;
+          return `<div class="line">${applyInline(line)}</div>`;
         }
-      }).join('\n');
+      }).join('');
     }
 
     // ==================== Mirror ====================
@@ -518,6 +526,9 @@
       prompterContent.classList.toggle('mirror-v', mirrorV);
       pMirrorHBtn.classList.toggle('active', mirrorH);
       pMirrorVBtn.classList.toggle('active', mirrorV);
+      // 編集画面側のボタン表示も同期(プロンプター中に切り替えても次回ズレない)
+      mirrorHBtn.classList.toggle('active', mirrorH);
+      mirrorVBtn.classList.toggle('active', mirrorV);
     }
 
     // ==================== Edit Screen Controls ====================
@@ -582,17 +593,26 @@
         lastTime = timestamp;
 
         if (isPlaying) {
-          // speed 1-20 → 15-300 px/sec
-          const pxPerSec = speed * 15;
-          scrollPos += pxPerSec * delta / 1000;
-
           const maxScroll = prompterWrapper.scrollHeight - prompterWrapper.clientHeight;
-          if (scrollPos >= maxScroll) {
-            scrollPos = maxScroll;
-            isPlaying = false;
-            updatePlayBtn();
+
+          if (voiceMode) {
+            // 喋ったペースに合わせて、目標位置へなめらかに追従
+            if (voiceTarget !== null) {
+              const t = Math.min(1, (delta / 1000) * VOICE_EASE);
+              scrollPos += (voiceTarget - scrollPos) * t;
+            }
+          } else {
+            // speed 1-20 → 15-300 px/sec
+            const pxPerSec = speed * 15;
+            scrollPos += pxPerSec * delta / 1000;
+            if (scrollPos >= maxScroll) {
+              scrollPos = maxScroll;
+              isPlaying = false;
+              updatePlayBtn();
+            }
           }
 
+          scrollPos = Math.max(0, Math.min(maxScroll, scrollPos));
           prompterWrapper.scrollTop = scrollPos;
         }
 
@@ -602,10 +622,196 @@
       rafId = requestAnimationFrame(animate);
     }
 
+    // ==================== Voice-follow ====================
+    // 句読点・空白を落とし、文字/数字のみ小文字化して照合用に正規化
+    function normalizeText(s) {
+      return (s || '').replace(/[^\p{L}\p{N}]/gu, '').toLowerCase();
+    }
+
+    // 現在の表示内容から照合用インデックスを作る(プロンプター開始時に1回)
+    function buildVoiceIndex() {
+      voiceNorm = '';
+      voiceLineRanges = [];
+      voiceIndex = 0;
+      voiceTarget = null;
+      prompterContent.querySelectorAll('.line').forEach(el => {
+        const n = normalizeText(el.textContent);
+        if (!n) return;
+        const start = voiceNorm.length;
+        voiceNorm += n;
+        voiceLineRanges.push({ start, end: voiceNorm.length, el });
+      });
+    }
+
+    // voiceIndex(norm内位置) → 追従先スクロール位置(px)を算出
+    function voiceIndexToTarget() {
+      const range = voiceLineRanges.find(r => voiceIndex >= r.start && voiceIndex <= r.end)
+                 || voiceLineRanges[voiceLineRanges.length - 1];
+      if (!range) return;
+      const frac = (voiceIndex - range.start) / Math.max(1, range.end - range.start);
+      const y = range.el.offsetTop + frac * range.el.offsetHeight;
+      // 読んでいる位置を画面の40%付近に置く
+      voiceTarget = y - prompterWrapper.clientHeight * 0.4;
+    }
+
+    // 現在のスクロール位置(画面40%)に対応する norm 位置を返す
+    function readingNormIndex() {
+      const y = scrollPos + prompterWrapper.clientHeight * 0.4;
+      for (const r of voiceLineRanges) {
+        if (y <= r.el.offsetTop + r.el.offsetHeight) return r.start;
+      }
+      return voiceNorm.length;
+    }
+
+    // 手動補正時: 音声の基準を今の表示位置に合わせ、勝手に元へ戻らないようにする
+    function anchorVoiceToScroll() {
+      if (!voiceMode) return;
+      voiceIndex = readingNormIndex();
+      voiceTarget = null; // 次に喋るまで動かさない
+      lastManualAnchorAt = (performance.now ? performance.now() : Date.now());
+    }
+
+    const BACK_PENALTY = 4; // 後退一致のコスト倍率(前進を優先しつつ言い直しは許す)
+
+    // 認識テキストの末尾と台本を照合し、追従先スクロール位置を更新
+    function updateVoicePosition(transcript) {
+      if (!voiceMode || !isPlaying || !voiceNorm) return;
+      const now = (performance.now ? performance.now() : Date.now());
+      if (now - lastVoiceProc < 150) return;       // 旧iPadの負荷軽減: 処理を間引く
+      if (now - lastManualAnchorAt < 500) return;  // 手動補正直後は音声で戻さない
+      lastVoiceProc = now;
+
+      const spoken = normalizeText(transcript);
+      if (spoken.length < 6) return; // 短すぎる断片は誤マッチしやすいので無視
+
+      // 現在地の少し手前〜前方だけを探索窓にする(長文台本でも軽い & 言い直しに対応)
+      const behind = 40;   // 言い直し・小さな戻りを許容する後方幅
+      const ahead = 400;   // 飛びすぎ防止の前方幅
+      const hayStart = Math.max(0, voiceIndex - behind);
+      const hay = voiceNorm.slice(hayStart, Math.min(voiceNorm.length, voiceIndex + ahead));
+
+      let bestEnd = -1, bestScore = Infinity;
+      // 末尾を長め→短めに。前進を優先しつつ、近接する後退(=言い直し)も許容して最良候補を選ぶ
+      for (let L = Math.min(16, spoken.length); L >= 6; L--) {
+        const needle = spoken.slice(-L);
+        let from = 0, found = false;
+        while (true) {
+          const rel = hay.indexOf(needle, from);
+          if (rel === -1) break;
+          found = true;
+          const end = hayStart + rel + L;
+          const diff = end - voiceIndex;
+          const score = diff >= 0 ? diff : (-diff) * BACK_PENALTY; // 後退は割高に
+          if (score < bestScore) { bestScore = score; bestEnd = end; }
+          from = rel + 1;
+        }
+        if (found) break; // 長い一致が取れたら確信度が高いので採用
+      }
+      if (bestEnd === -1) return;
+
+      voiceIndex = bestEnd;
+      voiceIndexToTarget();
+    }
+
+    // 認識を動かすべき条件: ユーザーがONにしていて、かつ再生中(=一時停止中は止めて省電力)
+    function shouldListen() { return voiceWantOn && isPlaying; }
+
+    // start()重複(InvalidStateError)を防ぐ安全な開始。starting/runningの間は呼ばない。
+    function safeStart() {
+      if (!recognition || recognitionRunning || recognitionStarting) return;
+      recognitionStarting = true;
+      try { recognition.start(); } catch (_) { recognitionStarting = false; }
+    }
+
+    function scheduleVoiceRestart(delay) {
+      if (restartTimer) return; // 二重予約しない(再起動ループ防止)
+      restartTimer = setTimeout(() => {
+        restartTimer = null;
+        if (shouldListen()) safeStart();
+      }, delay);
+    }
+
+    function setupRecognition() {
+      const r = new SR();
+      r.lang = 'ja-JP';
+      r.continuous = true;
+      r.interimResults = true;
+      r.onstart = () => { recognitionStarting = false; recognitionRunning = true; };
+      r.onresult = (e) => {
+        const last = e.results[e.results.length - 1];
+        if (last) updateVoicePosition(last[0].transcript);
+      };
+      r.onend = () => {
+        recognitionStarting = false;
+        recognitionRunning = false;
+        // iOS Safari等は勝手に止まるので、ONのままなら少し待って再開(間隔を空けてループ防止)
+        if (shouldListen()) scheduleVoiceRestart(300);
+      };
+      r.onerror = (e) => {
+        recognitionStarting = false;
+        if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+          stopVoice();
+          alert('マイクが使えませんでした。設定でマイク許可を確認してください。');
+        }
+        // no-speech / aborted / network 等は onend → 再開に任せる(間隔あり)
+      };
+      return r;
+    }
+
+    // 状態に合わせて認識を開始/停止する一元化ヘルパー
+    function syncVoiceRecognition() {
+      if (!recognition) return;
+      if (shouldListen()) {
+        safeStart();
+      } else {
+        if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
+        if (recognitionRunning || recognitionStarting) { try { recognition.stop(); } catch (_) {} }
+      }
+    }
+
+    function updateVoiceBtn() {
+      voiceBtn.classList.toggle('active', voiceMode);
+      voiceBtn.textContent = voiceMode ? '🎤 音声追従 ON' : '🎤 音声追従';
+    }
+
+    function startVoice() {
+      if (!SR) { alert('この端末/ブラウザは音声認識に対応していません。'); return; }
+      if (!recognition) recognition = setupRecognition();
+      voiceWantOn = true;
+      voiceMode = true;
+      buildVoiceIndex();
+      anchorVoiceToScroll(); // 今表示している位置から追従を再開できるよう基準合わせ
+      // 追従できるよう再生状態にする
+      if (!isPlaying) { isPlaying = true; updatePlayBtn(); if (!rafId) startAnimation(); }
+      syncVoiceRecognition();
+      updateVoiceBtn();
+    }
+
+    function stopVoice() {
+      voiceWantOn = false;
+      voiceMode = false;
+      voiceTarget = null;
+      if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
+      if (recognition && (recognitionRunning || recognitionStarting)) { try { recognition.stop(); } catch (_) {} }
+      updateVoiceBtn();
+    }
+
+    voiceBtn.addEventListener('click', () => {
+      if (voiceMode) stopVoice(); else startVoice();
+    });
+
+    if (!SR) {
+      voiceBtn.disabled = true;
+      voiceBtn.style.opacity = '0.4';
+      voiceBtn.style.cursor = 'not-allowed';
+      voiceBtn.title = 'この端末は音声認識に非対応です';
+    }
+
     // ==================== Prompter Controls ====================
     stopBtn.addEventListener('click', () => {
       if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
       isPlaying = false;
+      stopVoice();
       editScreen.style.display = 'flex';
       prompterScreen.style.display = 'none';
     });
@@ -616,6 +822,7 @@
       isPlaying = !isPlaying;
       updatePlayBtn();
       if (isPlaying && !rafId) startAnimation();
+      syncVoiceRecognition(); // 一時停止/再開で認識も止める/再開する
     }
 
     function updatePlayBtn() {
@@ -625,12 +832,14 @@
     rewindBtn.addEventListener('click', () => {
       scrollPos = Math.max(0, scrollPos - STEP_AMOUNT);
       prompterWrapper.scrollTop = scrollPos;
+      anchorVoiceToScroll();
     });
 
     forwardBtn.addEventListener('click', () => {
       const max = prompterWrapper.scrollHeight - prompterWrapper.clientHeight;
       scrollPos = Math.min(max, scrollPos + STEP_AMOUNT);
       prompterWrapper.scrollTop = scrollPos;
+      anchorVoiceToScroll();
     });
 
     function updateSpeedDisplay() { speedDisplay.textContent = speed; }
@@ -667,6 +876,7 @@
       const max = prompterWrapper.scrollHeight - prompterWrapper.clientHeight;
       scrollPos = Math.min(max, scrollPos);
       prompterWrapper.scrollTop = scrollPos;
+      anchorVoiceToScroll();
     }, { passive: false });
 
     // ==================== Touch (tablet swipe) ====================
@@ -684,6 +894,7 @@
       scrollPos = Math.min(max, scrollPos);
       prompterWrapper.scrollTop = scrollPos;
       touchStartY = e.touches[0].clientY;
+      anchorVoiceToScroll();
     }, { passive: false });
 
     // ==================== Keyboard Shortcuts ====================
@@ -701,6 +912,7 @@
           e.preventDefault();
           scrollPos = Math.max(0, scrollPos - STEP_AMOUNT);
           prompterWrapper.scrollTop = scrollPos;
+          anchorVoiceToScroll();
           break;
 
         case 'ArrowRight':
@@ -710,6 +922,7 @@
             const max = prompterWrapper.scrollHeight - prompterWrapper.clientHeight;
             scrollPos = Math.min(max, scrollPos + STEP_AMOUNT);
             prompterWrapper.scrollTop = scrollPos;
+            anchorVoiceToScroll();
           }
           break;
 
