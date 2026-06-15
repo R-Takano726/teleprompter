@@ -203,6 +203,11 @@
       color: #ffd54f;
     }
 
+    /* 迷子: 喋っているのに台本に追従できていない行(読み間違い/言い換え) */
+    #prompterContent .line.reading.diverged {
+      background: rgba(255, 152, 0, 0.28);
+    }
+
     /* 英単語・型番などを途中改行させない */
     #prompterContent .word {
       white-space: nowrap;
@@ -468,6 +473,8 @@
     let restartTimer = null;    // onend後の再開タイマー
     let lastVoiceProc = 0;      // 認識結果の処理スロットル用
     let lastManualAnchorAt = 0; // 手動補正直後は音声更新を少し無視する
+    let lastResultAt = 0;       // 最後に認識結果が来た時刻(=喋っている)
+    let lastAdvanceAt = 0;      // 最後にハイライトが前進した時刻
     const VOICE_EASE = 4;       // 追従のなめらかさ(大きいほど速く追従)
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
@@ -681,6 +688,12 @@
               const t = Math.min(1, (delta / 1000) * VOICE_EASE);
               scrollPos += (voiceTarget - scrollPos) * t;
             }
+            // 迷子検知: 喋っているのに一定時間ハイライトが進まない＝台本から外れている
+            if (readingEl) {
+              const lost = (timestamp - lastResultAt < DIVERGE_ACTIVE_MS)
+                        && (timestamp - lastAdvanceAt > DIVERGE_STUCK_MS);
+              readingEl.classList.toggle('diverged', lost);
+            }
           } else {
             // speed 1-20 → 15-300 px/sec
             const pxPerSec = speed * 15;
@@ -703,6 +716,8 @@
     }
 
     // ==================== Voice-follow ====================
+    function nowMs() { return performance.now ? performance.now() : Date.now(); }
+
     // 句読点・空白を落とし、文字/数字のみ小文字化して照合用に正規化
     function normalizeText(s) {
       return (s || '').replace(/[^\p{L}\p{N}]/gu, '').toLowerCase();
@@ -721,7 +736,7 @@
     // いま喋っている行をハイライト(色変更)。切り替わった時だけDOMを触る。
     function setReadingHighlight(el) {
       if (readingEl === el) return;
-      if (readingEl) readingEl.classList.remove('reading');
+      if (readingEl) readingEl.classList.remove('reading', 'diverged');
       readingEl = el || null;
       if (readingEl) readingEl.classList.add('reading');
     }
@@ -761,18 +776,21 @@
         const range = rangeForIndex();
         if (range) setReadingHighlight(range.el);
         updateKaraoke();
-        lastManualAnchorAt = (performance.now ? performance.now() : Date.now());
+        lastManualAnchorAt = nowMs();
+        lastAdvanceAt = nowMs(); // 手動補正直後は迷子扱いしない
       });
     }
 
     const BACK_PENALTY = 4;   // 後退一致のコスト倍率(前進を優先しつつ言い直しは許す)
     const MAX_NEAR_JUMP = 24; // これ以上の前方ジャンプは高確信(長い一致)時のみ許可
     const CONFIDENT_LEN = 10; // 大きく進むのを許可する一致長(文字)
+    const DIVERGE_STUCK_MS = 2000;  // 喋っているのにこの時間進まなければ「迷子」とみなす
+    const DIVERGE_ACTIVE_MS = 1500; // 直近この時間内に認識があれば「喋っている」
 
     // 認識テキストの末尾と台本を照合し、追従先スクロール位置を更新
     function updateVoicePosition(transcript) {
       if (!voiceMode || !isPlaying || !voiceNorm) return;
-      const now = (performance.now ? performance.now() : Date.now());
+      const now = nowMs();
       if (now - lastVoiceProc < 150) return;       // 旧iPadの負荷軽減: 処理を間引く
       if (now - lastManualAnchorAt < 500) return;  // 手動補正直後は音声で戻さない
       lastVoiceProc = now;
@@ -812,6 +830,7 @@
       if (bestEnd === -1) return;
 
       voiceIndex = bestEnd;
+      lastAdvanceAt = now; // 台本に一致して進んだ=迷子解除
       voiceIndexToTarget();
     }
 
@@ -840,6 +859,7 @@
       r.interimResults = true;
       r.onstart = () => { recognitionStarting = false; recognitionRunning = true; };
       r.onresult = (e) => {
+        lastResultAt = nowMs(); // 喋っている証拠(迷子判定用)
         const last = e.results[e.results.length - 1];
         if (last) updateVoicePosition(last[0].transcript);
       };
@@ -881,6 +901,8 @@
       if (!recognition) recognition = setupRecognition();
       voiceWantOn = true;
       voiceMode = true;
+      lastResultAt = 0;       // 開始直後は迷子扱いしない
+      lastAdvanceAt = nowMs();
       // 照合インデックスは buildPrompter(描画時)で構築済み。今の表示位置から追従を再開。
       anchorVoiceToScroll();
       // 追従できるよう再生状態にする
@@ -925,6 +947,7 @@
       isPlaying = !isPlaying;
       updatePlayBtn();
       if (isPlaying && !rafId) startAnimation();
+      if (!isPlaying && readingEl) readingEl.classList.remove('diverged'); // 停止中はオレンジを消す
       syncVoiceRecognition(); // 一時停止/再開で認識も止める/再開する
     }
 
