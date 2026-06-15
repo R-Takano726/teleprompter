@@ -186,6 +186,41 @@
       display: inline-block;
     }
 
+    /* クラウド同期(台本のMac↔iPad共有) */
+    .cloud-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .cloud-btn {
+      padding: 8px 14px;
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      background: var(--panel-soft);
+      color: #cfd6e4;
+      cursor: pointer;
+      font-size: 13px;
+      font-family: inherit;
+      transition: all 0.15s;
+    }
+
+    .cloud-btn:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .cloud-btn:active {
+      transform: translateY(1px);
+    }
+
+    .cloud-status {
+      font-size: 12px;
+      color: var(--muted);
+      margin-left: auto;
+    }
+
     #startBtn {
       align-self: stretch;
       padding: 16px;
@@ -502,6 +537,12 @@
       <div class="edit-head">
         <h1>TELEPROMPTER</h1>
         <div class="edit-sub">台本を貼り付けて開始 ・ 🎤 音声追従で喋ったペースに自動スクロール</div>
+      </div>
+
+      <div class="cloud-row">
+        <button class="cloud-btn" id="cloudSaveBtn">☁ クラウドに保存</button>
+        <button class="cloud-btn" id="cloudLoadBtn">☁ クラウドから取得</button>
+        <span class="cloud-status" id="cloudStatus">クラウド同期：—</span>
       </div>
 
       <textarea
@@ -1239,6 +1280,69 @@
           break;
       }
     });
+
+    // ==================== クラウド同期(台本のMac↔iPad共有) ====================
+    // Macで貼り付け→自動保存→iPadで開くと自動で読み込む。ログイン不要・本人専用の保存先。
+    const CLOUD_URL = 'https://kvdb.io/Fm3eM8Nq62GhKKmv2Medk1/script';
+    const cloudSaveBtn = document.getElementById('cloudSaveBtn');
+    const cloudLoadBtn = document.getElementById('cloudLoadBtn');
+    const cloudStatus  = document.getElementById('cloudStatus');
+    let cloudSaveTimer = null;
+
+    function setCloudStatus(msg) { cloudStatus.textContent = 'クラウド同期：' + msg; }
+    function nowHM() {
+      const d = new Date();
+      return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+    }
+
+    async function saveToCloud(manual) {
+      try {
+        if (manual) setCloudStatus('保存中…');
+        const res = await fetch(CLOUD_URL, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+          body: JSON.stringify({ text: scriptInput.value, updatedAt: Date.now() })
+        });
+        if (!res.ok) throw 0;
+        setCloudStatus('保存しました ' + nowHM());
+      } catch (e) {
+        setCloudStatus('保存できませんでした(オフライン?)');
+      }
+    }
+
+    async function loadFromCloud(manual) {
+      try {
+        setCloudStatus('取得中…');
+        const res = await fetch(CLOUD_URL, { cache: 'no-store' });
+        if (!res.ok) throw 0;
+        const data = await res.json();
+        const text = (data && typeof data.text === 'string') ? data.text : '';
+        if (!text) { setCloudStatus(manual ? 'クラウドに台本はまだありません' : '—'); return; }
+        // 自動取得時、既に別の内容を入力済みなら上書きせず通知だけ(手動取得で反映)
+        if (!manual && scriptInput.value.trim() !== '' && scriptInput.value !== text) {
+          setCloudStatus('クラウドに新しい台本あり（「取得」で反映）');
+          return;
+        }
+        scriptInput.value = text;
+        setCloudStatus('読み込みました ' + nowHM());
+      } catch (e) {
+        setCloudStatus(manual ? '取得できませんでした(オフライン?)' : '—');
+      }
+    }
+
+    cloudSaveBtn.addEventListener('click', () => saveToCloud(true));
+    cloudLoadBtn.addEventListener('click', () => loadFromCloud(true));
+
+    // 入力が止まったら自動保存(Macでそのまま貼れば勝手にクラウドへ)。
+    // プログラムからの value 代入では input は発火しないので、自動取得が保存を誘発することはない。
+    scriptInput.addEventListener('input', () => {
+      clearTimeout(cloudSaveTimer);
+      setCloudStatus('編集中…');
+      cloudSaveTimer = setTimeout(() => saveToCloud(false), 1200);
+    });
+
+    // 起動時に自動取得(iPadで開くと台本が入っている)
+    loadFromCloud(false);
   </script>
 </body>
 </html>
