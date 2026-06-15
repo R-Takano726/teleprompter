@@ -203,6 +203,12 @@
       color: #ffd54f;
     }
 
+    /* 読み間違い/読み飛ばした文字を赤く表示(spokenより優先) */
+    #prompterContent .ch.misread {
+      color: #ff5252;
+      font-weight: bold;
+    }
+
     /* 迷子: 喋っているのに台本に追従できていない行(読み間違い/言い換え) */
     #prompterContent .line.reading.diverged {
       background: rgba(255, 152, 0, 0.28);
@@ -475,6 +481,7 @@
     let lastManualAnchorAt = 0; // 手動補正直後は音声更新を少し無視する
     let lastResultAt = 0;       // 最後に認識結果が来た時刻(=喋っている)
     let lastAdvanceAt = 0;      // 最後にハイライトが前進した時刻
+    let stalledSinceAdvance = false; // 前進前にマッチ停止があったか(読み間違い検知用)
     const VOICE_EASE = 4;       // 追従のなめらかさ(大きいほど速く追従)
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
@@ -778,6 +785,7 @@
         updateKaraoke();
         lastManualAnchorAt = nowMs();
         lastAdvanceAt = nowMs(); // 手動補正直後は迷子扱いしない
+        stalledSinceAdvance = false;
       });
     }
 
@@ -786,6 +794,7 @@
     const CONFIDENT_LEN = 10; // 大きく進むのを許可する一致長(文字)
     const DIVERGE_STUCK_MS = 2000;  // 喋っているのにこの時間進まなければ「迷子」とみなす
     const DIVERGE_ACTIVE_MS = 1500; // 直近この時間内に認識があれば「喋っている」
+    const MISREAD_MAX = 16;         // この長さ以下の読み飛ばし区間を「読み間違い」として赤く出す
 
     // 認識テキストの末尾と台本を照合し、追従先スクロール位置を更新
     function updateVoicePosition(transcript) {
@@ -808,7 +817,7 @@
       // 採用可: 後退(=言い直し) / 近接の前進(jump<=MAX_NEAR_JUMP) / 長い一致(高確信, L>=CONFIDENT_LEN)。
       // 読み間違い対策: 短い一致での大きな前方ジャンプは採用しない(=誤読/偶然一致は無視して現在地を保つ)。
       //   例:「具体的には」を先にある「物理的に」と読んでも飛ばない。続けて正しい語を読めば近接一致で再追従。
-      let bestEnd = -1, bestScore = Infinity;
+      let bestEnd = -1, bestScore = Infinity, bestLen = 0;
       for (let L = Math.min(16, spoken.length); L >= 6; L--) {
         const needle = spoken.slice(-L);
         let from = 0, foundEligible = false;
@@ -820,18 +829,37 @@
           const eligible = diff <= MAX_NEAR_JUMP || L >= CONFIDENT_LEN;
           if (eligible) {
             const score = diff >= 0 ? diff : (-diff) * BACK_PENALTY; // 後退は割高に
-            if (score < bestScore) { bestScore = score; bestEnd = end; }
+            if (score < bestScore) { bestScore = score; bestEnd = end; bestLen = L; }
             foundEligible = true;
           }
           from = rel + 1;
         }
         if (foundEligible) break; // 採用候補が取れたら確定(より長い=高確信を優先)
       }
-      if (bestEnd === -1) return;
+      if (bestEnd === -1) { stalledSinceAdvance = true; return; } // 一致せず停止(誤読語で起きる)
 
+      const prevIndex = voiceIndex;
       voiceIndex = bestEnd;
       lastAdvanceAt = now; // 台本に一致して進んだ=迷子解除
       voiceIndexToTarget();
+
+      // 読み間違い検知: 「誤読語で一旦マッチが止まり、続けて正しい語で先へ飛ぶ」順序のときだけ、
+      // 飛ばされた隙間(=誤読/読み飛ばした語)を赤くマークする。停止なしの前方スキップや
+      // 暫定認識のブレ・ASRの取りこぼしは赤にしない(偽陽性を抑制)。
+      const matchStart = bestEnd - bestLen;
+      const gap = matchStart - prevIndex;
+      if (stalledSinceAdvance && gap >= 1 && gap <= MISREAD_MAX) markMisread(prevIndex, matchStart);
+      stalledSinceAdvance = false;
+    }
+
+    // norm位置 (from, to] に含まれる文字spanに .misread を付ける
+    function markMisread(from, to) {
+      for (let i = 0; i < voiceChars.length; i++) {
+        const p = voiceChars[i].normPos;
+        if (p <= from) continue;
+        if (p > to) break;
+        voiceChars[i].span.classList.add('misread');
+      }
     }
 
     // 認識を動かすべき条件: ユーザーがONにしていて、かつ再生中(=一時停止中は止めて省電力)
@@ -903,6 +931,7 @@
       voiceMode = true;
       lastResultAt = 0;       // 開始直後は迷子扱いしない
       lastAdvanceAt = nowMs();
+      stalledSinceAdvance = false;
       // 照合インデックスは buildPrompter(描画時)で構築済み。今の表示位置から追従を再開。
       anchorVoiceToScroll();
       // 追従できるよう再生状態にする
