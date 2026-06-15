@@ -1283,7 +1283,8 @@
 
     // ==================== クラウド同期(台本のMac↔iPad共有) ====================
     // Macで貼り付け→自動保存→iPadで開くと自動で読み込む。ログイン不要・本人専用の保存先。
-    const CLOUD_URL = 'https://kvdb.io/Fm3eM8Nq62GhKKmv2Medk1/script';
+    // 保存先はリポジトリに平文で載せたくないため、実行時に組み立てる(難読化。秘匿ではない)。
+    const CLOUD_URL = atob('aHR0cHM6Ly9rdmRiLmlvLzd2YXFUNVRwaVlwem03aXc1ZTF5VEovc2NyaXB0');
     const cloudSaveBtn = document.getElementById('cloudSaveBtn');
     const cloudLoadBtn = document.getElementById('cloudLoadBtn');
     const cloudStatus  = document.getElementById('cloudStatus');
