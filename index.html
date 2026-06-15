@@ -279,8 +279,13 @@
       transform: scaleX(-1);
     }
 
-    /* 上下反転: 行の順序・スクロールはそのまま、各行の文字だけ上下反転 */
-    #prompterContent.mirror-v .line {
+    /* 上下反転: 各文字を個別に上下反転する。
+       行(.line)ごとに反転すると、折り返した行の上下が入れ替わって読み順が崩れる
+       (長い文の末尾が先頭に来る)ため、文字単位で反転して並び順を保つ。
+       inline要素はtransformが効かないので inline-block にする。 */
+    #prompterContent.mirror-v .ch,
+    #prompterContent.mirror-v .li-marker {
+      display: inline-block;
       transform: scaleY(-1);
     }
 
@@ -654,7 +659,7 @@
     // ==================== Script Renderer + Voice Index ====================
     // 台本をDOM化しつつ、音声追従用インデックス(voiceNorm / voiceLineRanges / voiceChars)も構築する。
     // 各文字を <span class="ch"> にして、カラオケ式に読んだ所だけ色付けできるようにしている。
-    // 各行は block(.line)。上下反転は .line ごとに scaleY(-1) するため行順・スクロールは保たれる。
+    // 各行は block(.line)。上下反転は .ch(文字)ごとに scaleY(-1) するため、折り返し行も含め並び順は保たれる。
     function isWordChar(ch) { return /[\p{L}\p{N}]/u.test(ch); }
 
     // 1行分のテキストを1文字ずつ span 化して div に追加し、voiceNorm / voiceChars を更新。
