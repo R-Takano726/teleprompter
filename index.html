@@ -192,10 +192,20 @@
       transform: scaleY(-1);
     }
 
-    /* 音声追従中: いま喋っている行をハイライト */
+    /* 音声追従中: いま喋っている行をうっすら帯ハイライト(現在地の目印) */
     #prompterContent .line.reading {
-      background: rgba(79, 195, 247, 0.22);
+      background: rgba(79, 195, 247, 0.16);
       border-radius: 6px;
+    }
+
+    /* カラオケ式: 読み終えた文字を色付け(左から流れていく) */
+    #prompterContent .ch.spoken {
+      color: #ffd54f;
+    }
+
+    /* 英単語・型番などを途中改行させない */
+    #prompterContent .word {
+      white-space: nowrap;
     }
 
     /* Markdown heading colors */
@@ -449,6 +459,8 @@
     let voiceNorm = '';         // 台本を正規化した連結文字列
     let voiceLineRanges = [];   // [{start, end, el}] norm内の各行範囲→DOM
     let voiceIndex = 0;         // 現在読んでいるnorm内位置
+    let voiceChars = [];        // [{span, normPos}] 1文字ずつのspanとnorm位置(カラオケ用)
+    let spokenCount = 0;        // いま色付けしている先頭からの文字数
     let readingEl = null;       // いまハイライト中の行要素
     let recognition = null;
     let recognitionRunning = false;
@@ -488,48 +500,92 @@
     const pMirrorVBtn   = document.getElementById('pMirrorVBtn');
     const voiceBtn      = document.getElementById('voiceBtn');
 
-    // ==================== Markdown Parser ====================
-    function escapeHtml(text) {
-      return text
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-    }
+    // ==================== Script Renderer + Voice Index ====================
+    // 台本をDOM化しつつ、音声追従用インデックス(voiceNorm / voiceLineRanges / voiceChars)も構築する。
+    // 各文字を <span class="ch"> にして、カラオケ式に読んだ所だけ色付けできるようにしている。
+    // 各行は block(.line)。上下反転は .line ごとに scaleY(-1) するため行順・スクロールは保たれる。
+    function isWordChar(ch) { return /[\p{L}\p{N}]/u.test(ch); }
 
-    function applyInline(text) {
-      return escapeHtml(text).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    }
-
-    function parseMarkdown(text) {
-      const lines = text.split('\n');
-      // 各行を block 要素(.line)にする。上下反転は .line ごとに scaleY(-1) するため、
-      // 行順とスクロール挙動を保ったまま「文字だけ上下反転」を実現できる。
-      return lines.map(line => {
-        if (/^### /.test(line)) {
-          return `<div class="line h3">${applyInline(line.slice(4))}</div>`;
-        } else if (/^## /.test(line)) {
-          return `<div class="line h2">${applyInline(line.slice(3))}</div>`;
-        } else if (/^# /.test(line)) {
-          return `<div class="line h1">${applyInline(line.slice(2))}</div>`;
-        } else if (/^(\s*)[*-] /.test(line)) {
-          const match = line.match(/^(\s*)[*-] (.*)/);
-          const indent = match[1].length;
-          const content = match[2];
-          const extraIndent = indent > 0 ? ` style="padding-left:${1.8 + indent * 0.8}em"` : '';
-          return `<div class="line li-ul"${extraIndent}><span class="li-marker">•</span>${applyInline(content)}</div>`;
-        } else if (/^\s*\d+\. /.test(line)) {
-          const match = line.match(/^(\s*)(\d+)\. (.*)/);
-          const indent = match[1].length;
-          const num = match[2];
-          const content = match[3];
-          const extraIndent = indent > 0 ? ` style="padding-left:${1.8 + indent * 0.8}em"` : '';
-          return `<div class="line li-ol"${extraIndent}><span class="li-marker">${escapeHtml(num)}.</span>${applyInline(content)}</div>`;
-        } else if (line.trim() === '') {
-          return `<div class="line empty-line"></div>`;
+    // 1行分のテキストを1文字ずつ span 化して div に追加し、voiceNorm / voiceChars を更新。
+    // 連続する英数字は .word(nowrap) でまとめ、英単語が途中改行されないようにする。
+    function appendChars(div, content) {
+      let bold = false;
+      let run = null; // 英数字をまとめる nowrap ラッパ
+      for (let i = 0; i < content.length; i++) {
+        if (content[i] === '*' && content[i + 1] === '*') { bold = !bold; i++; continue; } // **太字**
+        const ch = content[i];
+        if (/[A-Za-z0-9]/.test(ch)) {
+          if (!run) { run = document.createElement('span'); run.className = 'word'; div.appendChild(run); }
         } else {
-          return `<div class="line">${applyInline(line)}</div>`;
+          run = null; // 日本語等は自由に折り返す
         }
-      }).join('');
+        const span = document.createElement('span');
+        span.className = 'ch';
+        if (bold) span.style.fontWeight = 'bold';
+        span.textContent = ch;
+        (run || div).appendChild(span);
+        if (isWordChar(ch)) voiceNorm += ch.toLowerCase(); // normalizeText と同じ正規化
+        voiceChars.push({ span, normPos: voiceNorm.length });
+      }
+    }
+
+    function buildPrompter(text) {
+      prompterContent.innerHTML = '';
+      voiceNorm = '';
+      voiceLineRanges = [];
+      voiceChars = [];
+      voiceIndex = 0;
+      voiceTarget = null;
+      readingEl = null;
+      spokenCount = 0;
+
+      text.split('\n').forEach(raw => {
+        const div = document.createElement('div');
+        div.className = 'line';
+        let content = raw;
+
+        if (/^### /.test(raw)) { div.classList.add('h3'); content = raw.slice(4); }
+        else if (/^## /.test(raw)) { div.classList.add('h2'); content = raw.slice(3); }
+        else if (/^# /.test(raw)) { div.classList.add('h1'); content = raw.slice(2); }
+        else if (/^(\s*)[*-] /.test(raw)) {
+          const m = raw.match(/^(\s*)[*-] (.*)/);
+          div.classList.add('li-ul');
+          if (m[1].length) div.style.paddingLeft = (1.8 + m[1].length * 0.8) + 'em';
+          const marker = document.createElement('span');
+          marker.className = 'li-marker'; marker.textContent = '•';
+          div.appendChild(marker);
+          content = m[2];
+        } else if (/^\s*\d+\. /.test(raw)) {
+          const m = raw.match(/^(\s*)(\d+)\. (.*)/);
+          div.classList.add('li-ol');
+          if (m[1].length) div.style.paddingLeft = (1.8 + m[1].length * 0.8) + 'em';
+          const marker = document.createElement('span');
+          marker.className = 'li-marker'; marker.textContent = m[2] + '.';
+          div.appendChild(marker);
+          content = m[3];
+        } else if (raw.trim() === '') {
+          div.classList.add('empty-line');
+          prompterContent.appendChild(div);
+          return; // 空行: 文字・範囲なし
+        }
+
+        const start = voiceNorm.length;
+        appendChars(div, content);
+        voiceLineRanges.push({ start, end: voiceNorm.length, el: div });
+        prompterContent.appendChild(div);
+      });
+    }
+
+    // カラオケ式ハイライト: voiceIndex までの文字に .spoken を付与/解除(増分処理で軽量)
+    function updateKaraoke() {
+      while (spokenCount < voiceChars.length && voiceChars[spokenCount].normPos <= voiceIndex) {
+        voiceChars[spokenCount].span.classList.add('spoken');
+        spokenCount++;
+      }
+      while (spokenCount > 0 && voiceChars[spokenCount - 1].normPos > voiceIndex) {
+        spokenCount--;
+        voiceChars[spokenCount].span.classList.remove('spoken');
+      }
     }
 
     // ==================== Viewport height (iOS Safariの100vhズレ対策) ====================
@@ -585,7 +641,7 @@
       }
 
       // Render
-      prompterContent.innerHTML = parseMarkdown(text);
+      buildPrompter(text);
       prompterContent.style.fontSize = fontSize + 'px';
       applyMirror();
 
@@ -652,25 +708,14 @@
       return (s || '').replace(/[^\p{L}\p{N}]/gu, '').toLowerCase();
     }
 
-    // 現在の表示内容から照合用インデックスを作る(プロンプター開始時に1回)
-    function buildVoiceIndex() {
-      voiceNorm = '';
-      voiceLineRanges = [];
-      voiceIndex = 0;
-      voiceTarget = null;
-      readingEl = null;
-      prompterContent.querySelectorAll('.line').forEach(el => {
-        const n = normalizeText(el.textContent);
-        if (!n) return;
-        const start = voiceNorm.length;
-        voiceNorm += n;
-        voiceLineRanges.push({ start, end: voiceNorm.length, el });
-      });
-    }
-
     function rangeForIndex() {
-      return voiceLineRanges.find(r => voiceIndex >= r.start && voiceIndex <= r.end)
-          || voiceLineRanges[voiceLineRanges.length - 1];
+      // 行境界(前行end==次行start)では次行を選ぶ。最後の行だけ末尾を含める。
+      for (let i = 0; i < voiceLineRanges.length; i++) {
+        if (voiceIndex < voiceLineRanges[i].end || i === voiceLineRanges.length - 1) {
+          return voiceLineRanges[i];
+        }
+      }
+      return voiceLineRanges[voiceLineRanges.length - 1];
     }
 
     // いま喋っている行をハイライト(色変更)。切り替わった時だけDOMを触る。
@@ -686,6 +731,7 @@
       const range = rangeForIndex();
       if (!range) return;
       setReadingHighlight(range.el);
+      updateKaraoke();
       const frac = (voiceIndex - range.start) / Math.max(1, range.end - range.start);
       const y = range.el.offsetTop + frac * range.el.offsetHeight;
       // 読んでいる位置を画面の40%付近に置く
@@ -702,13 +748,21 @@
     }
 
     // 手動補正時: 音声の基準を今の表示位置に合わせ、勝手に元へ戻らないようにする
+    let anchorScheduled = false;
     function anchorVoiceToScroll() {
-      if (!voiceMode) return;
-      voiceIndex = readingNormIndex();
-      voiceTarget = null; // 次に喋るまで動かさない
-      const range = rangeForIndex();
-      if (range) setReadingHighlight(range.el);
-      lastManualAnchorAt = (performance.now ? performance.now() : Date.now());
+      // 手動ドラッグで連続発火するので、1フレーム1回に間引く(古いiPad対策)
+      if (!voiceMode || anchorScheduled) return;
+      anchorScheduled = true;
+      requestAnimationFrame(() => {
+        anchorScheduled = false;
+        if (!voiceMode) return;
+        voiceIndex = readingNormIndex();
+        voiceTarget = null; // 次に喋るまで動かさない
+        const range = rangeForIndex();
+        if (range) setReadingHighlight(range.el);
+        updateKaraoke();
+        lastManualAnchorAt = (performance.now ? performance.now() : Date.now());
+      });
     }
 
     const BACK_PENALTY = 4;   // 後退一致のコスト倍率(前進を優先しつつ言い直しは許す)
@@ -827,8 +881,8 @@
       if (!recognition) recognition = setupRecognition();
       voiceWantOn = true;
       voiceMode = true;
-      buildVoiceIndex();
-      anchorVoiceToScroll(); // 今表示している位置から追従を再開できるよう基準合わせ
+      // 照合インデックスは buildPrompter(描画時)で構築済み。今の表示位置から追従を再開。
+      anchorVoiceToScroll();
       // 追従できるよう再生状態にする
       if (!isPlaying) { isPlaying = true; updatePlayBtn(); if (!rafId) startAnimation(); }
       syncVoiceRecognition();
