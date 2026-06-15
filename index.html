@@ -848,17 +848,20 @@
       // 暫定認識のブレ・ASRの取りこぼしは赤にしない(偽陽性を抑制)。
       const matchStart = bestEnd - bestLen;
       const gap = matchStart - prevIndex;
-      if (stalledSinceAdvance && gap >= 1 && gap <= MISREAD_MAX) markMisread(prevIndex, matchStart);
+      // 一致した区間は正しく読めた証拠なので赤を消す(言い直して正しく読み直すと赤が取れる)
+      setMisread(matchStart, bestEnd, false);
+      // 誤読語で停止→先へ飛んだ隙間は読み間違いとして赤に
+      if (stalledSinceAdvance && gap >= 1 && gap <= MISREAD_MAX) setMisread(prevIndex, matchStart, true);
       stalledSinceAdvance = false;
     }
 
-    // norm位置 (from, to] に含まれる文字spanに .misread を付ける
-    function markMisread(from, to) {
+    // norm位置 (from, to] に含まれる文字spanの .misread を付与/除去する
+    function setMisread(from, to, on) {
       for (let i = 0; i < voiceChars.length; i++) {
         const p = voiceChars[i].normPos;
         if (p <= from) continue;
         if (p > to) break;
-        voiceChars[i].span.classList.add('misread');
+        voiceChars[i].span.classList.toggle('misread', on);
       }
     }
 
