@@ -192,6 +192,12 @@
       transform: scaleY(-1);
     }
 
+    /* 音声追従中: いま喋っている行をハイライト */
+    #prompterContent .line.reading {
+      background: rgba(79, 195, 247, 0.22);
+      border-radius: 6px;
+    }
+
     /* Markdown heading colors */
     #prompterContent .h1 {
       color: #ffeb3b;
@@ -249,23 +255,28 @@
     #prompterControls {
       background: rgba(10, 10, 20, 0.95);
       border-top: 1px solid #222;
-      padding: 10px 16px;
+      padding: 8px 10px;
       display: flex;
-      gap: 8px;
+      gap: 6px;
       align-items: center;
       flex-wrap: wrap;
       flex-shrink: 0;
       backdrop-filter: blur(10px);
     }
 
+    #prompterControls .toggle-btn {
+      padding: 6px 11px;
+      font-size: 12px;
+    }
+
     .ctrl-btn {
-      padding: 7px 14px;
+      padding: 6px 10px;
       border: 1px solid #333;
       border-radius: 6px;
       background: #111;
       color: #ccc;
       cursor: pointer;
-      font-size: 13px;
+      font-size: 12px;
       font-family: inherit;
       transition: all 0.15s;
       white-space: nowrap;
@@ -328,7 +339,7 @@
       white-space: nowrap;
     }
 
-    @media (max-width: 600px) {
+    @media (max-width: 1100px) {
       .shortcut-hint {
         display: none;
       }
@@ -438,6 +449,7 @@
     let voiceNorm = '';         // 台本を正規化した連結文字列
     let voiceLineRanges = [];   // [{start, end, el}] norm内の各行範囲→DOM
     let voiceIndex = 0;         // 現在読んでいるnorm内位置
+    let readingEl = null;       // いまハイライト中の行要素
     let recognition = null;
     let recognitionRunning = false;
     let recognitionStarting = false; // start()〜onstart の間
@@ -520,6 +532,17 @@
       }).join('');
     }
 
+    // ==================== Viewport height (iOS Safariの100vhズレ対策) ====================
+    // 古いiPadでは 100vh が実際の表示高さより大きく、下のコントロールバーが画面外に
+    // はみ出す。実ビューポート(window.innerHeight)で高さを固定して防ぐ。
+    function syncPrompterHeight() {
+      if (prompterScreen.style.display !== 'none') {
+        prompterScreen.style.height = window.innerHeight + 'px';
+      }
+    }
+    window.addEventListener('resize', syncPrompterHeight);
+    window.addEventListener('orientationchange', () => setTimeout(syncPrompterHeight, 200));
+
     // ==================== Mirror ====================
     function applyMirror() {
       prompterContent.classList.toggle('mirror-h', mirrorH);
@@ -569,6 +592,7 @@
       // Switch screens
       editScreen.style.display = 'none';
       prompterScreen.style.display = 'flex';
+      syncPrompterHeight();
 
       // Reset
       scrollPos = 0;
@@ -634,6 +658,7 @@
       voiceLineRanges = [];
       voiceIndex = 0;
       voiceTarget = null;
+      readingEl = null;
       prompterContent.querySelectorAll('.line').forEach(el => {
         const n = normalizeText(el.textContent);
         if (!n) return;
@@ -643,11 +668,24 @@
       });
     }
 
-    // voiceIndex(norm内位置) → 追従先スクロール位置(px)を算出
+    function rangeForIndex() {
+      return voiceLineRanges.find(r => voiceIndex >= r.start && voiceIndex <= r.end)
+          || voiceLineRanges[voiceLineRanges.length - 1];
+    }
+
+    // いま喋っている行をハイライト(色変更)。切り替わった時だけDOMを触る。
+    function setReadingHighlight(el) {
+      if (readingEl === el) return;
+      if (readingEl) readingEl.classList.remove('reading');
+      readingEl = el || null;
+      if (readingEl) readingEl.classList.add('reading');
+    }
+
+    // voiceIndex(norm内位置) → 追従先スクロール位置(px)を算出＋現在行をハイライト
     function voiceIndexToTarget() {
-      const range = voiceLineRanges.find(r => voiceIndex >= r.start && voiceIndex <= r.end)
-                 || voiceLineRanges[voiceLineRanges.length - 1];
+      const range = rangeForIndex();
       if (!range) return;
+      setReadingHighlight(range.el);
       const frac = (voiceIndex - range.start) / Math.max(1, range.end - range.start);
       const y = range.el.offsetTop + frac * range.el.offsetHeight;
       // 読んでいる位置を画面の40%付近に置く
@@ -668,6 +706,8 @@
       if (!voiceMode) return;
       voiceIndex = readingNormIndex();
       voiceTarget = null; // 次に喋るまで動かさない
+      const range = rangeForIndex();
+      if (range) setReadingHighlight(range.el);
       lastManualAnchorAt = (performance.now ? performance.now() : Date.now());
     }
 
@@ -799,6 +839,7 @@
       voiceWantOn = false;
       voiceMode = false;
       voiceTarget = null;
+      setReadingHighlight(null); // ハイライト解除
       if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
       if (recognition && (recognitionRunning || recognitionStarting)) { try { recognition.stop(); } catch (_) {} }
       updateVoiceBtn();
