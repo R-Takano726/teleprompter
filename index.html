@@ -653,7 +653,8 @@
     let voiceNorm = '';         // 台本を正規化した連結文字列
     let voiceLineRanges = [];   // [{start, end, el}] norm内の各行範囲→DOM
     let voiceIndex = 0;         // 現在読んでいるnorm内位置
-    let voiceChars = [];        // [{span, normPos}] 1文字ずつのspanとnorm位置(カラオケ用)
+    let voiceChars = [];        // [{span, normPos, head}] 1文字ずつのspanとnorm位置(カラオケ用)
+    let voiceBodyPrefix = [0];  // norm各位置までの「本文(見出し以外)」累積文字数
     let spokenCount = 0;        // いま色付けしている先頭からの文字数
     let readingEl = null;       // いまハイライト中の行要素
     let recognition = null;
@@ -705,7 +706,8 @@
 
     // 1行分のテキストを1文字ずつ span 化して div に追加し、voiceNorm / voiceChars を更新。
     // 連続する英数字は .word(nowrap) でまとめ、英単語が途中改行されないようにする。
-    function appendChars(div, content) {
+    // isHeading: 見出し行か(見出しは「飛ばしてOK」扱いにするため、本文文字数の前計算から除外)。
+    function appendChars(div, content, isHeading) {
       let bold = false;
       let run = null; // 英数字をまとめる nowrap ラッパ
       for (let i = 0; i < content.length; i++) {
@@ -721,8 +723,12 @@
         if (bold) span.style.fontWeight = 'bold';
         span.textContent = ch;
         (run || div).appendChild(span);
-        if (isWordChar(ch)) voiceNorm += ch.toLowerCase(); // normalizeText と同じ正規化
-        voiceChars.push({ span, normPos: voiceNorm.length });
+        if (isWordChar(ch)) {
+          voiceNorm += ch.toLowerCase(); // normalizeText と同じ正規化
+          // 本文(見出し以外)の累積文字数。見出しスキップを前進ペナルティから除外するのに使う。
+          voiceBodyPrefix.push(voiceBodyPrefix[voiceBodyPrefix.length - 1] + (isHeading ? 0 : 1));
+        }
+        voiceChars.push({ span, normPos: voiceNorm.length, head: !!isHeading });
       }
     }
 
@@ -731,6 +737,7 @@
       voiceNorm = '';
       voiceLineRanges = [];
       voiceChars = [];
+      voiceBodyPrefix = [0];
       voiceIndex = 0;
       voiceTarget = null;
       readingEl = null;
@@ -740,10 +747,11 @@
         const div = document.createElement('div');
         div.className = 'line';
         let content = raw;
+        let isHeading = false;
 
-        if (/^### /.test(raw)) { div.classList.add('h3'); content = raw.slice(4); }
-        else if (/^## /.test(raw)) { div.classList.add('h2'); content = raw.slice(3); }
-        else if (/^# /.test(raw)) { div.classList.add('h1'); content = raw.slice(2); }
+        if (/^### /.test(raw)) { div.classList.add('h3'); content = raw.slice(4); isHeading = true; }
+        else if (/^## /.test(raw)) { div.classList.add('h2'); content = raw.slice(3); isHeading = true; }
+        else if (/^# /.test(raw)) { div.classList.add('h1'); content = raw.slice(2); isHeading = true; }
         else if (/^(\s*)[*-] /.test(raw)) {
           const m = raw.match(/^(\s*)[*-] (.*)/);
           div.classList.add('li-ul');
@@ -767,7 +775,7 @@
         }
 
         const start = voiceNorm.length;
-        appendChars(div, content);
+        appendChars(div, content, isHeading);
         voiceLineRanges.push({ start, end: voiceNorm.length, el: div });
         prompterContent.appendChild(div);
       });
@@ -913,6 +921,12 @@
       return (s || '').replace(/[^\p{L}\p{N}]/gu, '').toLowerCase();
     }
 
+    // norm区間 [a,b) に含まれる「本文(見出し以外)」の文字数。見出しスキップ判定に使う。
+    function bodySkip(a, b) {
+      if (b <= a) return 0;
+      return voiceBodyPrefix[b] - voiceBodyPrefix[a];
+    }
+
     function rangeForIndex() {
       // 行境界(前行end==次行start)では次行を選ぶ。最後の行だけ末尾を含める。
       for (let i = 0; i < voiceLineRanges.length; i++) {
@@ -1009,7 +1023,11 @@
           if (rel === -1) break;
           const end = hayStart + rel + L;
           const diff = end - voiceIndex;
-          const eligible = diff <= MAX_NEAR_JUMP || L >= CONFIDENT_LEN;
+          // 前方ジャンプの可否は「飛ばした本文の文字数」で判定。見出しの飛ばしは除外されるので、
+          // 見出しを読まずに本文へ進んでもブロックされない(=引き戻されない)。
+          const matchStartPos = end - L;
+          const bodyGap = matchStartPos > voiceIndex ? bodySkip(voiceIndex, matchStartPos) : 0;
+          const eligible = bodyGap <= MAX_NEAR_JUMP || L >= CONFIDENT_LEN;
           if (eligible) {
             const score = diff >= 0 ? diff : (-diff) * BACK_PENALTY; // 後退は割高に
             if (score < bestScore) { bestScore = score; bestEnd = end; bestLen = L; }
@@ -1044,6 +1062,7 @@
         const p = voiceChars[i].normPos;
         if (p <= from) continue;
         if (p > to) break;
+        if (on && voiceChars[i].head) continue; // 見出しは読み飛ばしても赤くしない
         voiceChars[i].span.classList.toggle('misread', on);
       }
     }
