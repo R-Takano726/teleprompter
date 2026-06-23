@@ -992,6 +992,7 @@
     const DIVERGE_STUCK_MS = 2000;  // 喋っているのにこの時間進まなければ「迷子」とみなす
     const DIVERGE_ACTIVE_MS = 1500; // 直近この時間内に認識があれば「喋っている」
     const MISREAD_MAX = 16;         // この長さ以下の読み飛ばし区間を「読み間違い」として赤く出す
+    const MIN_MATCH_LEN = 4;        // 一致に必要な最低文字数(小さいほど食いつき良く=緩い。誤反応とトレードオフ)
 
     // 認識テキストの末尾と台本を照合し、追従先スクロール位置を更新
     function updateVoicePosition(transcript) {
@@ -1002,7 +1003,7 @@
       lastVoiceProc = now;
 
       const spoken = normalizeText(transcript);
-      if (spoken.length < 6) return; // 短すぎる断片は誤マッチしやすいので無視
+      if (spoken.length < MIN_MATCH_LEN) return; // 短すぎる断片は無視(MIN_MATCH_LENで緩さ調整)
 
       // 現在地の少し手前〜前方だけを探索窓にする(長文台本でも軽い & 言い直しに対応)
       const behind = 40;   // 言い直し・小さな戻りを許容する後方幅
@@ -1015,7 +1016,7 @@
       // 読み間違い対策: 短い一致での大きな前方ジャンプは採用しない(=誤読/偶然一致は無視して現在地を保つ)。
       //   例:「具体的には」を先にある「物理的に」と読んでも飛ばない。続けて正しい語を読めば近接一致で再追従。
       let bestEnd = -1, bestScore = Infinity, bestLen = 0;
-      for (let L = Math.min(16, spoken.length); L >= 6; L--) {
+      for (let L = Math.min(16, spoken.length); L >= MIN_MATCH_LEN; L--) {
         const needle = spoken.slice(-L);
         let from = 0, foundEligible = false;
         while (true) {
