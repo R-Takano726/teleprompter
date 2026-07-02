@@ -314,13 +314,13 @@
       transform: scaleX(-1);
     }
 
-    /* 上下反転: 各文字を個別に上下反転する。
-       行(.line)ごとに反転すると、折り返した行の上下が入れ替わって読み順が崩れる
-       (長い文の末尾が先頭に来る)ため、文字単位で反転して並び順を保つ。
-       inline要素はtransformが効かないので inline-block にする。 */
-    #prompterContent.mirror-v .ch,
-    #prompterContent.mirror-v .li-marker {
-      display: inline-block;
+    /* 上下反転: 表示ビューポート(見えている枠)ごと上下反転する。
+       鏡は像を1軸反転させるので、画面側で同じ軸をあらかじめ反転しておくと
+       二重反転で「正立・行は上→下・スクロールは上方向」に戻り正しく読める。
+       ※コンテンツ全体(scaleY)だと台本末尾から始まり、文字単位だと鏡越しに
+         行順とスクロールが逆になる。ビューポート単位が唯一正しい。
+       ※つまり画面を直接見ると上下逆に見えるのが正常(鏡越しが正)。 */
+    #prompterWrapper.mirror-v {
       transform: scaleY(-1);
     }
 
@@ -973,7 +973,8 @@
 
     function applyMirror() {
       prompterContent.classList.toggle('mirror-h', mirrorH);
-      prompterContent.classList.toggle('mirror-v', mirrorV);
+      // 上下はビューポート(枠)ごと反転する(コメント: CSS側の #prompterWrapper.mirror-v 参照)
+      prompterWrapper.classList.toggle('mirror-v', mirrorV);
       // カウントダウンの数字もミラーリグ越しに正しく読めるよう追従
       countdownOverlay.classList.toggle('mirror-h', mirrorH);
       countdownOverlay.classList.toggle('mirror-v', mirrorV);
