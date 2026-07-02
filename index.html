@@ -527,6 +527,101 @@
       .ctrl-group { padding: 2px 6px 2px 8px; }
       #playBtn { min-width: 92px; }
     }
+
+    /* ==================== 見出しジャンプ ==================== */
+    #tocPanel {
+      position: absolute;
+      left: 12px;
+      right: 12px;
+      bottom: 12px;
+      max-height: 55%;
+      overflow: auto;
+      background: rgba(14, 17, 25, 0.96);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 6px;
+      z-index: 20;
+      display: none;
+      -webkit-backdrop-filter: blur(12px);
+      backdrop-filter: blur(12px);
+    }
+
+    .toc-item {
+      display: block;
+      width: 100%;
+      text-align: left;
+      padding: 11px 12px;
+      background: transparent;
+      border: none;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      font-size: 15px;
+      font-family: inherit;
+      cursor: pointer;
+    }
+
+    .toc-item:last-child { border-bottom: none; }
+    .toc-item:hover { background: rgba(79, 195, 247, 0.12); }
+    /* 見出し色は本文の h1/h2/h3 と揃える */
+    .toc-1 { color: #ffeb3b; }
+    .toc-2 { color: #4fc3f7; padding-left: 26px; }
+    .toc-3 { color: #a5d6a7; padding-left: 40px; }
+
+    /* ==================== 開始カウントダウン ==================== */
+    #countdownOverlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 30;
+      pointer-events: none; /* 表示中も操作バーを触れるように */
+    }
+
+    #countdownOverlay .count-num {
+      font-size: 200px;
+      font-weight: 700;
+      color: var(--accent);
+      text-shadow: 0 0 50px rgba(79, 195, 247, 0.5);
+    }
+
+    /* ミラーリグ越しでも数字が正しく読めるよう、本文の反転設定に追従 */
+    #countdownOverlay.mirror-h { transform: scaleX(-1); }
+    #countdownOverlay.mirror-v { transform: scaleY(-1); }
+    #countdownOverlay.mirror-h.mirror-v { transform: scale(-1, -1); }
+
+    /* ==================== 読み間違いサマリー(編集画面) ==================== */
+    #misreadSummary {
+      background: #1f1416;
+      border: 1px solid #4a2326;
+      border-radius: 14px;
+      padding: 14px 16px;
+      display: none;
+      flex-direction: column;
+      gap: 8px;
+      font-size: 14px;
+    }
+
+    #misreadSummary .mis-head {
+      color: #f1a3a3;
+      font-weight: 700;
+      font-size: 12px;
+      letter-spacing: 0.5px;
+    }
+
+    #misreadSummary .mis-item {
+      color: #cfd6e4;
+      line-height: 1.7;
+    }
+
+    #misreadSummary .mr {
+      color: #ff5252;
+      font-weight: 700;
+    }
+
+    #misreadSummary .cloud-btn { align-self: flex-end; }
   </style>
 </head>
 <body>
@@ -575,6 +670,8 @@
         <span style="color:#5b6478">※音声追従中に表示</span>
       </div>
 
+      <div id="misreadSummary"></div>
+
       <button id="startBtn">▶ プロンプター開始</button>
     </div>
   </div>
@@ -587,6 +684,8 @@
       </div>
       <div class="fade-top"></div>
       <div class="fade-bottom"></div>
+      <div id="tocPanel"></div>
+      <div id="countdownOverlay"><span class="count-num" id="countNum">3</span></div>
     </div>
 
     <div id="prompterControls">
@@ -598,6 +697,7 @@
 
       <button class="ctrl-btn" id="rewindBtn">⏪ 戻る</button>
       <button class="ctrl-btn" id="forwardBtn">進む ⏩</button>
+      <button class="ctrl-btn" id="tocBtn">☰ 見出し</button>
 
       <div class="separator"></div>
 
@@ -675,6 +775,10 @@
     const DIVERGE_ACTIVE_MS = 1500; // 直近この時間内に認識があれば「喋っている」とみなす
     const MISREAD_MAX = 16;         // この長さ以下の読み飛ばし区間を「読み間違い」(赤)にする
 
+    // --- 開始カウントダウン ---
+    const COUNTDOWN_SECS = 3;       // 再生開始前のカウント数(通常スクロール時のみ)
+    const COUNTDOWN_STEP_MS = 1000; // カウントの間隔
+
     // --- クラウド同期 ---
     // 保存先はリポジトリに平文で載せたくないため、実行時に組み立てる(難読化。秘匿ではない)。
     const CLOUD_URL = atob('aHR0cHM6Ly9rdmRiLmlvLzd2YXFUNVRwaVlwem03aXc1ZTF5VEovc2NyaXB0');
@@ -715,6 +819,11 @@
     const pMirrorHBtn   = $('pMirrorHBtn');
     const pMirrorVBtn   = $('pMirrorVBtn');
     const voiceBtn      = $('voiceBtn');
+    const tocBtn        = $('tocBtn');
+    const tocPanel      = $('tocPanel');
+    const countdownOverlay = $('countdownOverlay');
+    const countNum      = $('countNum');
+    const misreadSummary = $('misreadSummary');
 
     // ==================== 3. 状態 ====================
     // --- 再生・表示 ---
@@ -752,6 +861,9 @@
 
     // --- クラウド同期 ---
     let cloudSaveTimer = null;
+
+    // --- 開始カウントダウン ---
+    let countdownTimer = null;
 
     // ==================== 4. 台本レンダラ ====================
     // 台本をDOM化しつつ、音声追従用インデックス(voiceNorm / voiceLineRanges / voiceChars)も構築する。
@@ -862,6 +974,9 @@
     function applyMirror() {
       prompterContent.classList.toggle('mirror-h', mirrorH);
       prompterContent.classList.toggle('mirror-v', mirrorV);
+      // カウントダウンの数字もミラーリグ越しに正しく読めるよう追従
+      countdownOverlay.classList.toggle('mirror-h', mirrorH);
+      countdownOverlay.classList.toggle('mirror-v', mirrorV);
       // 両画面のボタン表示を同期(どちらで切り替えてもズレない)
       pMirrorHBtn.classList.toggle('active', mirrorH);
       pMirrorVBtn.classList.toggle('active', mirrorV);
@@ -870,7 +985,8 @@
     }
 
     function updatePlayBtn() {
-      playBtn.textContent = isPlaying ? '⏸ 一時停止' : '▶ 再生';
+      playBtn.textContent = countdownTimer ? '✕ 中止'
+                          : isPlaying ? '⏸ 一時停止' : '▶ 再生';
     }
 
     // iOS Safariの100vhズレ対策: 古いiPadでは 100vh が実際の表示高さより大きく、
@@ -935,12 +1051,135 @@
       rafId = requestAnimationFrame(animate);
     }
 
-    function togglePlay() {
-      isPlaying = !isPlaying;
+    // ==================== 開始カウントダウン ====================
+    // 通常スクロールは再生した瞬間から流れるため、録画開始と喋り出しを揃える3カウントを挟む。
+    // 音声追従モードは喋るまで動かないのでカウント不要(即開始)。
+    function startCountdown(onDone) {
+      cancelCountdown();
+      let n = COUNTDOWN_SECS;
+      countNum.textContent = n;
+      countdownOverlay.style.display = 'flex';
+      const tick = () => {
+        n--;
+        if (n <= 0) {
+          countdownTimer = null;
+          countdownOverlay.style.display = 'none';
+          onDone();
+        } else {
+          countNum.textContent = n;
+          countdownTimer = setTimeout(tick, COUNTDOWN_STEP_MS);
+        }
+      };
+      countdownTimer = setTimeout(tick, COUNTDOWN_STEP_MS);
       updatePlayBtn();
-      if (isPlaying && !rafId) startAnimation();
-      if (!isPlaying && readingEl) readingEl.classList.remove('diverged'); // 停止中はオレンジを消す
-      syncVoiceRecognition(); // 一時停止/再開で認識も止める/再開する
+    }
+
+    function cancelCountdown() {
+      if (countdownTimer) { clearTimeout(countdownTimer); countdownTimer = null; }
+      countdownOverlay.style.display = 'none';
+    }
+
+    function startPlaybackNow() {
+      isPlaying = true;
+      updatePlayBtn();
+      if (!rafId) startAnimation();
+      syncVoiceRecognition();
+    }
+
+    // 再生開始の入口(カウントダウンを挟むか判断)
+    function requestPlay() {
+      if (voiceMode) { startPlaybackNow(); return; }
+      startCountdown(startPlaybackNow);
+    }
+
+    function togglePlay() {
+      if (countdownTimer) { // カウントダウン中に押したら中止(停止のまま)
+        cancelCountdown();
+        updatePlayBtn();
+        return;
+      }
+      if (isPlaying) {
+        isPlaying = false;
+        updatePlayBtn();
+        if (readingEl) readingEl.classList.remove('diverged'); // 停止中はオレンジを消す
+        syncVoiceRecognition(); // 一時停止で認識も止める
+      } else {
+        requestPlay();
+      }
+    }
+
+    // ==================== 見出しジャンプ ====================
+    // 台本内の見出し一覧からワンタップで頭出し(撮り直し・セクション単位の収録用)。
+    function buildToc() {
+      tocPanel.innerHTML = '';
+      const heads = prompterContent.querySelectorAll('.line.h1, .line.h2, .line.h3');
+      heads.forEach(el => {
+        const b = document.createElement('button');
+        b.className = 'toc-item ' + (el.classList.contains('h1') ? 'toc-1'
+                                   : el.classList.contains('h2') ? 'toc-2' : 'toc-3');
+        b.textContent = el.textContent;
+        b.addEventListener('click', () => { jumpToLine(el); hideToc(); });
+        tocPanel.appendChild(b);
+      });
+      const none = heads.length === 0;
+      tocBtn.disabled = none;
+      tocBtn.style.opacity = none ? '0.4' : '';
+    }
+
+    function jumpToLine(el) {
+      const max = prompterWrapper.scrollHeight - prompterWrapper.clientHeight;
+      // 見出しが読み位置(画面40%)に来るように合わせる
+      scrollPos = Math.max(0, Math.min(max, el.offsetTop - prompterWrapper.clientHeight * READ_POS_RATIO));
+      prompterWrapper.scrollTop = scrollPos;
+      anchorVoiceToScroll(); // 音声追従の基準もここに合わせる
+    }
+
+    function toggleToc() {
+      tocPanel.style.display = (tocPanel.style.display === 'block') ? 'none' : 'block';
+    }
+
+    function hideToc() { tocPanel.style.display = 'none'; }
+
+    // ==================== 読み間違いサマリー ====================
+    // 終了時、赤マーク(読み間違い/読み飛ばし)が残っていれば編集画面に一覧表示。
+    // どこを撮り直す/編集で切るかの目安になる。
+    function showMisreadSummary() {
+      let groupCount = 0;
+      const items = [];
+      prompterContent.querySelectorAll('.line').forEach(line => {
+        const chs = line.querySelectorAll('.ch');
+        let has = false;
+        chs.forEach(c => { if (c.classList.contains('misread')) has = true; });
+        if (!has) return;
+        const item = document.createElement('div');
+        item.className = 'mis-item';
+        let prev = false;
+        chs.forEach(c => {
+          const mis = c.classList.contains('misread');
+          if (mis && !prev) groupCount++;
+          const s = document.createElement('span');
+          if (mis) s.className = 'mr';
+          s.textContent = c.textContent;
+          item.appendChild(s);
+          prev = mis;
+        });
+        items.push(item);
+      });
+
+      if (items.length === 0) { misreadSummary.style.display = 'none'; return; }
+
+      misreadSummary.innerHTML = '';
+      const head = document.createElement('div');
+      head.className = 'mis-head';
+      head.textContent = '⚠ 前回の読み間違い・読み飛ばし ' + groupCount + '箇所（赤=該当語。撮り直し/編集カットの目安）';
+      misreadSummary.appendChild(head);
+      items.forEach(i => misreadSummary.appendChild(i));
+      const close = document.createElement('button');
+      close.className = 'cloud-btn';
+      close.textContent = '閉じる';
+      close.addEventListener('click', () => { misreadSummary.style.display = 'none'; });
+      misreadSummary.appendChild(close);
+      misreadSummary.style.display = 'flex';
     }
 
     // ==================== 画面遷移 ====================
@@ -954,6 +1193,9 @@
       }
 
       buildPrompter(text);
+      buildToc();
+      hideToc();
+      misreadSummary.style.display = 'none';
       prompterContent.style.fontSize = fontSize + 'px';
       applyMirror();
 
@@ -964,14 +1206,16 @@
       scrollPos = 0;
       prompterWrapper.scrollTop = 0;
 
-      isPlaying = true;
       updatePlayBtn();
-      startAnimation();
+      requestPlay(); // rAFループは startPlaybackNow が起動する(カウントダウン中は回さない)
     }
 
     function stopPrompter() {
+      cancelCountdown();
+      hideToc();
       if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
       isPlaying = false;
+      showMisreadSummary(); // 赤マークが残っていれば編集画面に一覧を出す
       stopVoice();
       editScreen.style.display = 'flex';
       prompterScreen.style.display = 'none';
@@ -1055,7 +1299,9 @@
     // 手動補正時: 音声の基準を今の表示位置に合わせ、勝手に元へ戻らないようにする。
     // 手動ドラッグで連続発火するので、1フレーム1回に間引く(古いiPad対策)。
     function anchorVoiceToScroll() {
-      if (!voiceMode || anchorScheduled) return;
+      if (!voiceMode) return;
+      voiceTarget = null; // 即時に無効化(次フレームで旧ターゲットへ引き戻されないよう同期で行う)
+      if (anchorScheduled) return;
       anchorScheduled = true;
       requestAnimationFrame(() => {
         anchorScheduled = false;
@@ -1197,6 +1443,7 @@
     function startVoice() {
       if (!SR) { alert('この端末/ブラウザは音声認識に対応していません。'); return; }
       if (!recognition) recognition = setupRecognition();
+      cancelCountdown(); // 音声追従は喋るまで動かないのでカウント不要、即開始
       voiceWantOn = true;
       voiceMode = true;
       lastResultAt = 0;       // 開始直後は迷子扱いしない
@@ -1284,6 +1531,7 @@
     pMirrorHBtn.addEventListener('click', () => setMirror(!mirrorH, mirrorV));
     pMirrorVBtn.addEventListener('click', () => setMirror(mirrorH, !mirrorV));
     voiceBtn.addEventListener('click', () => { if (voiceMode) stopVoice(); else startVoice(); });
+    tocBtn.addEventListener('click', toggleToc);
 
     // --- ホイール・スワイプ ---
     prompterWrapper.addEventListener('wheel', (e) => {
