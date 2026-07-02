@@ -64,6 +64,24 @@
       user-select: none;
     }
 
+    /* 絵文字ではなく統一ラインアイコン(インラインSVG)で揃える */
+    .icon {
+      width: 15px;
+      height: 15px;
+      flex-shrink: 0;
+    }
+
+    .cloud-btn, .ctrl-btn, .toggle-btn, #startBtn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+    }
+
+    /* フォントサイズボタンの「あ」グリフ(小/大) */
+    .glyph-s { font-size: 11px; line-height: 1; }
+    .glyph-l { font-size: 16px; line-height: 1; font-weight: 600; }
+
     /* ==================== Edit Screen ==================== */
     #editScreen {
       display: flex;
@@ -89,22 +107,29 @@
 
     #editScreen h1 {
       display: inline-block;
-      font-size: 22px;
+      font-size: 16px;
       font-weight: 700;
-      letter-spacing: 9px;
-      text-indent: 9px; /* letter-spacingの右余りを打ち消して中央に */
-      color: var(--accent);
-      background: linear-gradient(115deg, #b7e7ff 0%, var(--accent) 45%, #7ce7ff 100%);
-      -webkit-background-clip: text;
-      background-clip: text;
-      -webkit-text-fill-color: transparent;
+      letter-spacing: 7px;
+      text-indent: 7px; /* letter-spacingの右余りを打ち消して中央に */
+      color: #dfe6f2;
+    }
+
+    /* ワードマーク下の細いアクセントライン(静かな装飾) */
+    .edit-head::after {
+      content: '';
+      display: block;
+      width: 26px;
+      height: 2px;
+      background: var(--accent);
+      border-radius: 1px;
+      margin: 10px auto 0;
     }
 
     .edit-sub {
       font-size: 12px;
       color: var(--muted);
       letter-spacing: 1.5px;
-      margin-top: 7px;
+      margin-top: 10px;
     }
 
     /* --- クラウド同期バー --- */
@@ -223,12 +248,12 @@
 
     input[type="range"]::-webkit-slider-thumb {
       -webkit-appearance: none;
-      width: 22px;
-      height: 22px;
+      width: 18px;
+      height: 18px;
       border-radius: 50%;
-      background: radial-gradient(circle at 35% 30%, #d9f3ff, var(--accent) 70%);
+      background: #fff;
       border: none;
-      box-shadow: 0 2px 10px rgba(79, 195, 247, 0.5);
+      box-shadow: 0 1px 6px rgba(0, 0, 0, 0.45);
     }
 
     /* --- 反転トグル --- */
@@ -260,7 +285,6 @@
       color: #04121c;
       border-color: var(--accent);
       font-weight: 700;
-      box-shadow: 0 2px 14px rgba(79, 195, 247, 0.35);
     }
 
     /* --- 色の凡例 --- */
@@ -290,29 +314,26 @@
     /* --- 開始ボタン --- */
     #startBtn {
       align-self: stretch;
-      padding: 17px;
-      background: linear-gradient(135deg, var(--accent), var(--accent-deep));
+      padding: 15px;
+      background: var(--accent);
       color: #04121c;
       border: none;
-      border-radius: 14px;
-      font-size: 17px;
+      border-radius: var(--r-md);
+      font-size: 15px;
       font-weight: 700;
       cursor: pointer;
-      letter-spacing: 3px;
-      text-indent: 3px;
-      transition: transform 0.1s, box-shadow 0.2s, filter 0.2s;
-      box-shadow: 0 8px 28px rgba(79, 195, 247, 0.32);
+      letter-spacing: 1.5px;
+      transition: transform 0.06s, filter 0.15s;
+      box-shadow: 0 3px 14px rgba(79, 195, 247, 0.22);
     }
 
     #startBtn:hover {
-      filter: brightness(1.07);
-      transform: translateY(-1px);
-      box-shadow: 0 12px 34px rgba(79, 195, 247, 0.42);
+      filter: brightness(1.06);
     }
 
     #startBtn:active {
-      transform: translateY(0);
-      filter: brightness(0.97);
+      transform: translateY(1px);
+      filter: brightness(0.96);
     }
 
     /* ==================== Prompter Screen ==================== */
@@ -527,16 +548,16 @@
 
     /* 再生 = 最重要ボタンとして明確に大きく・緑で */
     #playBtn {
-      background: linear-gradient(135deg, #235c2d, #16391e);
-      color: #b9f0b9;
-      border-color: #2f6a3a;
+      background: #1d4425;
+      color: #aee8b2;
+      border-color: #2e5c38;
       font-weight: 700;
-      min-width: 110px;
+      min-width: 116px;
     }
 
     #playBtn:hover {
-      background: linear-gradient(135deg, #2a6e36, #1b4525);
-      border-color: #3a8449;
+      background: #235230;
+      border-color: #3a7046;
     }
 
     #stopBtn {
@@ -590,9 +611,8 @@
       height: 8px;
       border-radius: 50%;
       background: var(--danger);
-      margin-right: 7px;
       vertical-align: middle;
-      animation: micPulse 1.3s ease-in-out infinite;
+      animation: micPulse 1.3s ease-in-out infinite; /* 間隔はボタンのgapに任せる */
     }
 
     .separator {
@@ -670,8 +690,8 @@
     #countdownOverlay .count-num {
       font-size: 200px;
       font-weight: 700;
-      color: var(--accent);
-      text-shadow: 0 0 60px rgba(79, 195, 247, 0.55);
+      color: #e9f6ff;
+      text-shadow: 0 0 24px rgba(79, 195, 247, 0.3);
       font-variant-numeric: tabular-nums;
       animation: countPop 0.85s ease both;
     }
@@ -696,6 +716,9 @@
     }
 
     #misreadSummary .mis-head {
+      display: flex;
+      align-items: center;
+      gap: 7px;
       color: #f1a3a3;
       font-weight: 700;
       font-size: 12px;
@@ -756,12 +779,12 @@
     <div class="edit-card">
       <div class="edit-head">
         <h1>TELEPROMPTER</h1>
-        <div class="edit-sub">台本を貼り付けて開始 ・ 🎤 音声追従で喋ったペースに自動スクロール</div>
+        <div class="edit-sub">台本を貼り付けて開始 ・ 音声追従で喋ったペースに自動スクロール</div>
       </div>
 
       <div class="cloud-row">
-        <button class="cloud-btn" id="cloudSaveBtn">☁ クラウドに保存</button>
-        <button class="cloud-btn" id="cloudLoadBtn">☁ クラウドから取得</button>
+        <button class="cloud-btn" id="cloudSaveBtn"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/></svg><span>クラウドに保存</span></button>
+        <button class="cloud-btn" id="cloudLoadBtn"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/><polyline points="8 17 12 21 16 17"/><line x1="12" y1="12" x2="12" y2="21"/></svg><span>クラウドから取得</span></button>
         <span class="cloud-status" id="cloudStatus">クラウド同期：—</span>
       </div>
 
@@ -797,7 +820,7 @@
 
       <div id="misreadSummary"></div>
 
-      <button id="startBtn">▶ プロンプター開始</button>
+      <button id="startBtn"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><path d="M7 4.8v14.4c0 .7.76 1.13 1.36.77l12-7.2a.9.9 0 0 0 0-1.54l-12-7.2A.9.9 0 0 0 7 4.8z"/></svg><span>プロンプター開始</span></button>
     </div>
   </div>
 
@@ -814,30 +837,30 @@
     </div>
 
     <div id="prompterControls">
-      <button class="ctrl-btn" id="stopBtn">✕ 終了</button>
+      <button class="ctrl-btn" id="stopBtn"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg><span>終了</span></button>
 
       <div class="separator"></div>
 
-      <button class="ctrl-btn" id="playBtn">⏸ 一時停止</button>
+      <button class="ctrl-btn" id="playBtn"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><rect x="6" y="4" width="4" height="16" rx="1.2"/><rect x="14" y="4" width="4" height="16" rx="1.2"/></svg><span>一時停止</span></button>
 
-      <button class="ctrl-btn" id="rewindBtn">⏪ 戻る</button>
-      <button class="ctrl-btn" id="forwardBtn">進む ⏩</button>
-      <button class="ctrl-btn" id="tocBtn">☰ 見出し</button>
+      <button class="ctrl-btn" id="rewindBtn"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="11 17 6 12 11 7"/><polyline points="18 17 13 12 18 7"/></svg><span>戻る</span></button>
+      <button class="ctrl-btn" id="forwardBtn"><span>進む</span><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg></button>
+      <button class="ctrl-btn" id="tocBtn"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="9" y1="6" x2="20" y2="6"/><line x1="9" y1="12" x2="20" y2="12"/><line x1="9" y1="18" x2="20" y2="18"/><circle cx="4.5" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="4.5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="4.5" cy="18" r="1" fill="currentColor" stroke="none"/></svg><span>見出し</span></button>
 
       <div class="separator"></div>
 
       <div class="ctrl-group">
         <span class="ctrl-group-label">速度</span>
-        <button class="ctrl-btn" id="speedDownBtn">−</button>
+        <button class="ctrl-btn" id="speedDownBtn"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
         <span class="ctrl-val" id="speedDisplay">5</span>
-        <button class="ctrl-btn" id="speedUpBtn">＋</button>
+        <button class="ctrl-btn" id="speedUpBtn"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
       </div>
 
       <div class="ctrl-group">
         <span class="ctrl-group-label">サイズ</span>
-        <button class="ctrl-btn" id="fontDownBtn">A−</button>
+        <button class="ctrl-btn" id="fontDownBtn"><span class="glyph-s">あ</span></button>
         <span class="ctrl-val" id="fontDisplay">60</span>
-        <button class="ctrl-btn" id="fontUpBtn">A＋</button>
+        <button class="ctrl-btn" id="fontUpBtn"><span class="glyph-l">あ</span></button>
       </div>
 
       <div class="separator"></div>
@@ -850,7 +873,7 @@
 
       <div class="separator"></div>
 
-      <button class="toggle-btn" id="voiceBtn" title="喋ったペースに合わせて自動でスクロール">🎤 音声追従</button>
+      <button class="toggle-btn" id="voiceBtn" title="喋ったペースに合わせて自動でスクロール"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="21"/></svg><span>音声追従</span></button>
 
       <span class="shortcut-hint">
         スペース: 一時停止 &nbsp;|&nbsp; ←→ / ↑↓: 移動 &nbsp;|&nbsp; +−: 速度 &nbsp;|&nbsp; ホイール: スクロール
@@ -1074,6 +1097,14 @@
     }
 
     // ==================== 5. 表示ヘルパー ====================
+    // ボタン表示をJSから書き換える箇所用のSVGアイコン(HTML側の静的アイコンと同一デザイン)
+    const SVG_OPEN = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">';
+    const ICON_PLAY  = '<svg class="icon" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><path d="M7 4.8v14.4c0 .7.76 1.13 1.36.77l12-7.2a.9.9 0 0 0 0-1.54l-12-7.2A.9.9 0 0 0 7 4.8z"/></svg>';
+    const ICON_PAUSE = '<svg class="icon" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><rect x="6" y="4" width="4" height="16" rx="1.2"/><rect x="14" y="4" width="4" height="16" rx="1.2"/></svg>';
+    const ICON_X     = SVG_OPEN + '<line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>';
+    const ICON_MIC   = SVG_OPEN + '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="21"/></svg>';
+    const ICON_ALERT = SVG_OPEN + '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
+
     // 速度・フォント・反転は「状態を変える→両画面の表示に反映」を1か所に集約。
     // スライダーの進捗を左側の色塗りで見せる(見た目のみ)
     function paintRange(el) {
@@ -1121,8 +1152,9 @@
     }
 
     function updatePlayBtn() {
-      playBtn.textContent = countdownTimer ? '✕ 中止'
-                          : isPlaying ? '⏸ 一時停止' : '▶ 再生';
+      playBtn.innerHTML = countdownTimer ? ICON_X + '<span>中止</span>'
+                        : isPlaying ? ICON_PAUSE + '<span>一時停止</span>'
+                        : ICON_PLAY + '<span>再生</span>';
     }
 
     // iOS Safariの100vhズレ対策: 古いiPadでは 100vh が実際の表示高さより大きく、
@@ -1315,7 +1347,8 @@
       misreadSummary.innerHTML = '';
       const head = document.createElement('div');
       head.className = 'mis-head';
-      head.textContent = '⚠ 前回の読み間違い・読み飛ばし ' + groupCount + '箇所（赤=該当語。撮り直し/編集カットの目安）';
+      head.innerHTML = ICON_ALERT + '<span>前回の読み間違い・読み飛ばし ' + groupCount
+        + '箇所（赤=該当語。撮り直し/編集カットの目安）</span>';
       misreadSummary.appendChild(head);
       items.forEach(i => misreadSummary.appendChild(i));
       const close = document.createElement('button');
@@ -1581,7 +1614,7 @@
 
     function updateVoiceBtn() {
       voiceBtn.classList.toggle('active', voiceMode);
-      voiceBtn.textContent = voiceMode ? '🎤 音声追従 ON' : '🎤 音声追従';
+      voiceBtn.innerHTML = ICON_MIC + '<span>' + (voiceMode ? '音声追従 ON' : '音声追従') + '</span>';
     }
 
     function startVoice() {
