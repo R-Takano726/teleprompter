@@ -634,7 +634,90 @@
   </div>
 
   <script>
-    // ==================== State ====================
+    /* ============================================================
+       テレプロンプター メインスクリプト
+       構成:
+         1. 設定定数   … チューニングはこのブロックだけ触れば良い
+         2. DOM参照
+         3. 状態
+         4. 台本レンダラ … DOM構築＋音声照合インデックスの同時生成
+         5. 表示ヘルパー … 速度/フォント/反転/画面高さ
+         6. スクロール・アニメーション
+         7. 音声追従   … 認識・照合・カラオケ/赤/オレンジ表示
+         8. クラウド同期 … Mac↔iPadの台本共有
+         9. イベント接続・初期化
+       ============================================================ */
+
+    // ==================== 1. 設定定数 ====================
+    // --- スクロール・表示 ---
+    const STEP_AMOUNT = 300;        // 戻る/進む・矢印キーの1回の移動量(px)
+    const SPEED_MIN = 1, SPEED_MAX = 20;
+    const SPEED_PX_FACTOR = 15;     // speed 1-20 → 15-300 px/sec
+    const FONT_MIN = 16, FONT_MAX = 80, FONT_STEP = 4;
+    const TOUCH_SCROLL_RATE = 1.5;  // スワイプ移動量の倍率
+    const READ_POS_RATIO = 0.4;     // 読み位置を画面の上から40%に置く
+
+    // --- 音声追従(照合) ---
+    const VOICE_EASE = 4;           // 追従のなめらかさ(大きいほど速く追従)
+    const VOICE_THROTTLE_MS = 150;  // 認識結果の処理間引き(旧iPad負荷対策)
+    const MANUAL_IGNORE_MS = 500;   // 手動補正直後は音声で戻さない時間
+    const SEARCH_BEHIND = 40;       // 言い直し・小さな戻りを許容する後方探索幅
+    const SEARCH_AHEAD = 400;       // 飛びすぎ防止の前方探索幅
+    const MAX_MATCH_LEN = 16;       // 照合に使う認識末尾の最大文字数
+    const MIN_MATCH_LEN = 4;        // 一致に必要な最低文字数(小さいほど食いつき良い。誤反応とトレードオフ)
+    const BACK_PENALTY = 4;         // 後退一致のコスト倍率(前進を優先しつつ言い直しは許す)
+    const MAX_NEAR_JUMP = 24;       // これ以上の前方ジャンプ(本文文字数)は高確信(長い一致)時のみ許可
+    const CONFIDENT_LEN = 10;       // 大きく進むのを許可する一致長(文字)
+    const RESTART_DELAY_MS = 300;   // 認識が勝手に止まった後の再開待ち(再起動ループ防止)
+
+    // --- 迷子・読み間違い表示 ---
+    const DIVERGE_STUCK_MS = 2000;  // 喋っているのにこの時間進まなければ「迷子」(行をオレンジ)
+    const DIVERGE_ACTIVE_MS = 1500; // 直近この時間内に認識があれば「喋っている」とみなす
+    const MISREAD_MAX = 16;         // この長さ以下の読み飛ばし区間を「読み間違い」(赤)にする
+
+    // --- クラウド同期 ---
+    // 保存先はリポジトリに平文で載せたくないため、実行時に組み立てる(難読化。秘匿ではない)。
+    const CLOUD_URL = atob('aHR0cHM6Ly9rdmRiLmlvLzd2YXFUNVRwaVlwem03aXc1ZTF5VEovc2NyaXB0');
+    const CLOUD_SAVE_DEBOUNCE_MS = 1200; // 入力停止からこの時間後に自動保存
+
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    // ==================== 2. DOM参照 ====================
+    const $ = (id) => document.getElementById(id);
+    // 画面
+    const editScreen      = $('editScreen');
+    const prompterScreen  = $('prompterScreen');
+    // 編集画面
+    const scriptInput   = $('scriptInput');
+    const speedRange    = $('speedRange');
+    const fontRange     = $('fontRange');
+    const speedVal      = $('speedVal');
+    const fontVal       = $('fontVal');
+    const mirrorHBtn    = $('mirrorHBtn');
+    const mirrorVBtn    = $('mirrorVBtn');
+    const startBtn      = $('startBtn');
+    const cloudSaveBtn  = $('cloudSaveBtn');
+    const cloudLoadBtn  = $('cloudLoadBtn');
+    const cloudStatus   = $('cloudStatus');
+    // プロンプター画面
+    const prompterWrapper = $('prompterWrapper');
+    const prompterContent = $('prompterContent');
+    const stopBtn       = $('stopBtn');
+    const playBtn       = $('playBtn');
+    const rewindBtn     = $('rewindBtn');
+    const forwardBtn    = $('forwardBtn');
+    const speedDownBtn  = $('speedDownBtn');
+    const speedUpBtn    = $('speedUpBtn');
+    const fontDownBtn   = $('fontDownBtn');
+    const fontUpBtn     = $('fontUpBtn');
+    const speedDisplay  = $('speedDisplay');
+    const fontDisplay   = $('fontDisplay');
+    const pMirrorHBtn   = $('pMirrorHBtn');
+    const pMirrorVBtn   = $('pMirrorVBtn');
+    const voiceBtn      = $('voiceBtn');
+
+    // ==================== 3. 状態 ====================
+    // --- 再生・表示 ---
     let isPlaying = false;
     let speed = 2;
     let fontSize = 60;
@@ -643,62 +726,34 @@
     let scrollPos = 0;
     let lastTime = null;
     let rafId = null;
+    let touchStartY = 0;
 
-    const STEP_AMOUNT = 300; // pixels per rewind/forward step
-
-    // ==================== Voice-follow State ====================
-    let voiceMode = false;      // 音声追従ON/OFF
-    let voiceWantOn = false;    // 自動再開の意図フラグ
-    let voiceTarget = null;     // 追従先スクロール位置(px)。nullなら停止
-    let voiceNorm = '';         // 台本を正規化した連結文字列
-    let voiceLineRanges = [];   // [{start, end, el}] norm内の各行範囲→DOM
-    let voiceIndex = 0;         // 現在読んでいるnorm内位置
-    let voiceChars = [];        // [{span, normPos, head}] 1文字ずつのspanとnorm位置(カラオケ用)
-    let voiceBodyPrefix = [0];  // norm各位置までの「本文(見出し以外)」累積文字数
-    let spokenCount = 0;        // いま色付けしている先頭からの文字数
-    let readingEl = null;       // いまハイライト中の行要素
+    // --- 音声追従 ---
+    let voiceMode = false;          // 音声追従ON/OFF
+    let voiceWantOn = false;        // 自動再開の意図フラグ
+    let voiceTarget = null;         // 追従先スクロール位置(px)。nullなら停止
+    let voiceNorm = '';             // 台本を正規化した連結文字列
+    let voiceLineRanges = [];       // [{start, end, el}] norm内の各行範囲→DOM
+    let voiceIndex = 0;             // 現在読んでいるnorm内位置
+    let voiceChars = [];            // [{span, normPos, head}] 1文字ずつのspanとnorm位置(カラオケ用)
+    let voiceBodyPrefix = [0];      // norm各位置までの「本文(見出し以外)」累積文字数
+    let spokenCount = 0;            // いま色付けしている先頭からの文字数
+    let readingEl = null;           // いまハイライト中の行要素
     let recognition = null;
     let recognitionRunning = false;
     let recognitionStarting = false; // start()〜onstart の間
-    let restartTimer = null;    // onend後の再開タイマー
-    let lastVoiceProc = 0;      // 認識結果の処理スロットル用
-    let lastManualAnchorAt = 0; // 手動補正直後は音声更新を少し無視する
-    let lastResultAt = 0;       // 最後に認識結果が来た時刻(=喋っている)
-    let lastAdvanceAt = 0;      // 最後にハイライトが前進した時刻
+    let restartTimer = null;        // onend後の再開タイマー
+    let anchorScheduled = false;    // 手動補正のフレーム間引き用
+    let lastVoiceProc = 0;          // 認識結果の処理スロットル用
+    let lastManualAnchorAt = 0;     // 手動補正直後は音声更新を少し無視する
+    let lastResultAt = 0;           // 最後に認識結果が来た時刻(=喋っている)
+    let lastAdvanceAt = 0;          // 最後にハイライトが前進した時刻
     let stalledSinceAdvance = false; // 前進前にマッチ停止があったか(読み間違い検知用)
-    const VOICE_EASE = 4;       // 追従のなめらかさ(大きいほど速く追従)
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
-    // ==================== Elements ====================
-    const editScreen    = document.getElementById('editScreen');
-    const prompterScreen  = document.getElementById('prompterScreen');
-    const scriptInput   = document.getElementById('scriptInput');
-    const prompterWrapper = document.getElementById('prompterWrapper');
-    const prompterContent = document.getElementById('prompterContent');
+    // --- クラウド同期 ---
+    let cloudSaveTimer = null;
 
-    const speedRange = document.getElementById('speedRange');
-    const fontRange  = document.getElementById('fontRange');
-    const speedVal   = document.getElementById('speedVal');
-    const fontVal    = document.getElementById('fontVal');
-    const mirrorHBtn = document.getElementById('mirrorHBtn');
-    const mirrorVBtn = document.getElementById('mirrorVBtn');
-    const startBtn   = document.getElementById('startBtn');
-
-    const stopBtn       = document.getElementById('stopBtn');
-    const playBtn       = document.getElementById('playBtn');
-    const rewindBtn     = document.getElementById('rewindBtn');
-    const forwardBtn    = document.getElementById('forwardBtn');
-    const speedDownBtn  = document.getElementById('speedDownBtn');
-    const speedUpBtn    = document.getElementById('speedUpBtn');
-    const fontDownBtn   = document.getElementById('fontDownBtn');
-    const fontUpBtn     = document.getElementById('fontUpBtn');
-    const speedDisplay  = document.getElementById('speedDisplay');
-    const fontDisplay   = document.getElementById('fontDisplay');
-    const pMirrorHBtn   = document.getElementById('pMirrorHBtn');
-    const pMirrorVBtn   = document.getElementById('pMirrorVBtn');
-    const voiceBtn      = document.getElementById('voiceBtn');
-
-    // ==================== Script Renderer + Voice Index ====================
+    // ==================== 4. 台本レンダラ ====================
     // 台本をDOM化しつつ、音声追従用インデックス(voiceNorm / voiceLineRanges / voiceChars)も構築する。
     // 各文字を <span class="ch"> にして、カラオケ式に読んだ所だけ色付けできるようにしている。
     // 各行は block(.line)。上下反転は .ch(文字)ごとに scaleY(-1) するため、折り返し行も含め並び順は保たれる。
@@ -781,93 +836,61 @@
       });
     }
 
-    // カラオケ式ハイライト: voiceIndex までの文字に .spoken を付与/解除(増分処理で軽量)
-    function updateKaraoke() {
-      while (spokenCount < voiceChars.length && voiceChars[spokenCount].normPos <= voiceIndex) {
-        voiceChars[spokenCount].span.classList.add('spoken');
-        spokenCount++;
-      }
-      while (spokenCount > 0 && voiceChars[spokenCount - 1].normPos > voiceIndex) {
-        spokenCount--;
-        voiceChars[spokenCount].span.classList.remove('spoken');
-      }
+    // ==================== 5. 表示ヘルパー ====================
+    // 速度・フォント・反転は「状態を変える→両画面の表示に反映」を1か所に集約。
+    function setSpeed(n) {
+      speed = Math.max(SPEED_MIN, Math.min(SPEED_MAX, n));
+      speedVal.textContent = speed;
+      speedDisplay.textContent = speed;
+      speedRange.value = speed;
     }
 
-    // ==================== Viewport height (iOS Safariの100vhズレ対策) ====================
-    // 古いiPadでは 100vh が実際の表示高さより大きく、下のコントロールバーが画面外に
-    // はみ出す。実ビューポート(window.innerHeight)で高さを固定して防ぐ。
-    function syncPrompterHeight() {
-      if (prompterScreen.style.display !== 'none') {
-        prompterScreen.style.height = window.innerHeight + 'px';
-      }
+    function setFontSize(px) {
+      fontSize = Math.max(FONT_MIN, Math.min(FONT_MAX, px));
+      fontVal.textContent = fontSize;
+      fontDisplay.textContent = fontSize;
+      fontRange.value = fontSize;
+      prompterContent.style.fontSize = fontSize + 'px';
     }
-    window.addEventListener('resize', syncPrompterHeight);
-    window.addEventListener('orientationchange', () => setTimeout(syncPrompterHeight, 200));
 
-    // ==================== Mirror ====================
+    function setMirror(h, v) {
+      mirrorH = h;
+      mirrorV = v;
+      applyMirror();
+    }
+
     function applyMirror() {
       prompterContent.classList.toggle('mirror-h', mirrorH);
       prompterContent.classList.toggle('mirror-v', mirrorV);
+      // 両画面のボタン表示を同期(どちらで切り替えてもズレない)
       pMirrorHBtn.classList.toggle('active', mirrorH);
       pMirrorVBtn.classList.toggle('active', mirrorV);
-      // 編集画面側のボタン表示も同期(プロンプター中に切り替えても次回ズレない)
       mirrorHBtn.classList.toggle('active', mirrorH);
       mirrorVBtn.classList.toggle('active', mirrorV);
     }
 
-    // ==================== Edit Screen Controls ====================
-    speedRange.addEventListener('input', () => {
-      speed = parseInt(speedRange.value);
-      speedVal.textContent = speed;
-    });
+    function updatePlayBtn() {
+      playBtn.textContent = isPlaying ? '⏸ 一時停止' : '▶ 再生';
+    }
 
-    fontRange.addEventListener('input', () => {
-      fontSize = parseInt(fontRange.value);
-      fontVal.textContent = fontSize;
-    });
-
-    mirrorHBtn.addEventListener('click', () => {
-      mirrorH = !mirrorH;
-      mirrorHBtn.classList.toggle('active', mirrorH);
-    });
-
-    mirrorVBtn.addEventListener('click', () => {
-      mirrorV = !mirrorV;
-      mirrorVBtn.classList.toggle('active', mirrorV);
-    });
-
-    startBtn.addEventListener('click', () => {
-      const text = scriptInput.value.trim();
-      if (!text) {
-        scriptInput.focus();
-        scriptInput.style.borderColor = '#ef5350';
-        setTimeout(() => { scriptInput.style.borderColor = ''; }, 800);
-        return;
+    // iOS Safariの100vhズレ対策: 古いiPadでは 100vh が実際の表示高さより大きく、
+    // 下のコントロールバーが画面外にはみ出す。実ビューポートで高さを固定して防ぐ。
+    function syncPrompterHeight() {
+      if (prompterScreen.style.display === 'flex') {
+        prompterScreen.style.height = window.innerHeight + 'px';
       }
+    }
 
-      // Render
-      buildPrompter(text);
-      prompterContent.style.fontSize = fontSize + 'px';
-      applyMirror();
+    // ==================== 6. スクロール・アニメーション ====================
+    // 手動スクロール(戻る/進む・ホイール・スワイプ・矢印キー)の共通処理。
+    // クランプ→反映→音声追従の基準合わせ、を必ずセットで行う。
+    function manualScrollBy(delta) {
+      const max = prompterWrapper.scrollHeight - prompterWrapper.clientHeight;
+      scrollPos = Math.max(0, Math.min(max, scrollPos + delta));
+      prompterWrapper.scrollTop = scrollPos;
+      anchorVoiceToScroll();
+    }
 
-      // Switch screens
-      editScreen.style.display = 'none';
-      prompterScreen.style.display = 'flex';
-      syncPrompterHeight();
-
-      // Reset
-      scrollPos = 0;
-      prompterWrapper.scrollTop = 0;
-
-      // Start
-      isPlaying = true;
-      updatePlayBtn();
-      updateSpeedDisplay();
-      updateFontDisplay();
-      startAnimation();
-    });
-
-    // ==================== Animation Loop ====================
     function startAnimation() {
       if (rafId) cancelAnimationFrame(rafId);
       lastTime = null;
@@ -893,8 +916,7 @@
               readingEl.classList.toggle('diverged', lost);
             }
           } else {
-            // speed 1-20 → 15-300 px/sec
-            const pxPerSec = speed * 15;
+            const pxPerSec = speed * SPEED_PX_FACTOR;
             scrollPos += pxPerSec * delta / 1000;
             if (scrollPos >= maxScroll) {
               scrollPos = maxScroll;
@@ -913,7 +935,49 @@
       rafId = requestAnimationFrame(animate);
     }
 
-    // ==================== Voice-follow ====================
+    function togglePlay() {
+      isPlaying = !isPlaying;
+      updatePlayBtn();
+      if (isPlaying && !rafId) startAnimation();
+      if (!isPlaying && readingEl) readingEl.classList.remove('diverged'); // 停止中はオレンジを消す
+      syncVoiceRecognition(); // 一時停止/再開で認識も止める/再開する
+    }
+
+    // ==================== 画面遷移 ====================
+    function startPrompter() {
+      const text = scriptInput.value.trim();
+      if (!text) {
+        scriptInput.focus();
+        scriptInput.style.borderColor = '#ef5350';
+        setTimeout(() => { scriptInput.style.borderColor = ''; }, 800);
+        return;
+      }
+
+      buildPrompter(text);
+      prompterContent.style.fontSize = fontSize + 'px';
+      applyMirror();
+
+      editScreen.style.display = 'none';
+      prompterScreen.style.display = 'flex';
+      syncPrompterHeight();
+
+      scrollPos = 0;
+      prompterWrapper.scrollTop = 0;
+
+      isPlaying = true;
+      updatePlayBtn();
+      startAnimation();
+    }
+
+    function stopPrompter() {
+      if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+      isPlaying = false;
+      stopVoice();
+      editScreen.style.display = 'flex';
+      prompterScreen.style.display = 'none';
+    }
+
+    // ==================== 7. 音声追従 ====================
     function nowMs() { return performance.now ? performance.now() : Date.now(); }
 
     // 句読点・空白を落とし、文字/数字のみ小文字化して照合用に正規化
@@ -945,6 +1009,29 @@
       if (readingEl) readingEl.classList.add('reading');
     }
 
+    // カラオケ式ハイライト: voiceIndex までの文字に .spoken を付与/解除(増分処理で軽量)
+    function updateKaraoke() {
+      while (spokenCount < voiceChars.length && voiceChars[spokenCount].normPos <= voiceIndex) {
+        voiceChars[spokenCount].span.classList.add('spoken');
+        spokenCount++;
+      }
+      while (spokenCount > 0 && voiceChars[spokenCount - 1].normPos > voiceIndex) {
+        spokenCount--;
+        voiceChars[spokenCount].span.classList.remove('spoken');
+      }
+    }
+
+    // norm位置 (from, to] に含まれる文字spanの .misread(赤) を付与/除去する
+    function setMisread(from, to, on) {
+      for (let i = 0; i < voiceChars.length; i++) {
+        const p = voiceChars[i].normPos;
+        if (p <= from) continue;
+        if (p > to) break;
+        if (on && voiceChars[i].head) continue; // 見出しは読み飛ばしても赤くしない
+        voiceChars[i].span.classList.toggle('misread', on);
+      }
+    }
+
     // voiceIndex(norm内位置) → 追従先スクロール位置(px)を算出＋現在行をハイライト
     function voiceIndexToTarget() {
       const range = rangeForIndex();
@@ -953,23 +1040,21 @@
       updateKaraoke();
       const frac = (voiceIndex - range.start) / Math.max(1, range.end - range.start);
       const y = range.el.offsetTop + frac * range.el.offsetHeight;
-      // 読んでいる位置を画面の40%付近に置く
-      voiceTarget = y - prompterWrapper.clientHeight * 0.4;
+      voiceTarget = y - prompterWrapper.clientHeight * READ_POS_RATIO;
     }
 
     // 現在のスクロール位置(画面40%)に対応する norm 位置を返す
     function readingNormIndex() {
-      const y = scrollPos + prompterWrapper.clientHeight * 0.4;
+      const y = scrollPos + prompterWrapper.clientHeight * READ_POS_RATIO;
       for (const r of voiceLineRanges) {
         if (y <= r.el.offsetTop + r.el.offsetHeight) return r.start;
       }
       return voiceNorm.length;
     }
 
-    // 手動補正時: 音声の基準を今の表示位置に合わせ、勝手に元へ戻らないようにする
-    let anchorScheduled = false;
+    // 手動補正時: 音声の基準を今の表示位置に合わせ、勝手に元へ戻らないようにする。
+    // 手動ドラッグで連続発火するので、1フレーム1回に間引く(古いiPad対策)。
     function anchorVoiceToScroll() {
-      // 手動ドラッグで連続発火するので、1フレーム1回に間引く(古いiPad対策)
       if (!voiceMode || anchorScheduled) return;
       anchorScheduled = true;
       requestAnimationFrame(() => {
@@ -986,37 +1071,29 @@
       });
     }
 
-    const BACK_PENALTY = 4;   // 後退一致のコスト倍率(前進を優先しつつ言い直しは許す)
-    const MAX_NEAR_JUMP = 24; // これ以上の前方ジャンプは高確信(長い一致)時のみ許可
-    const CONFIDENT_LEN = 10; // 大きく進むのを許可する一致長(文字)
-    const DIVERGE_STUCK_MS = 2000;  // 喋っているのにこの時間進まなければ「迷子」とみなす
-    const DIVERGE_ACTIVE_MS = 1500; // 直近この時間内に認識があれば「喋っている」
-    const MISREAD_MAX = 16;         // この長さ以下の読み飛ばし区間を「読み間違い」として赤く出す
-    const MIN_MATCH_LEN = 4;        // 一致に必要な最低文字数(小さいほど食いつき良く=緩い。誤反応とトレードオフ)
-
     // 認識テキストの末尾と台本を照合し、追従先スクロール位置を更新
     function updateVoicePosition(transcript) {
       if (!voiceMode || !isPlaying || !voiceNorm) return;
       const now = nowMs();
-      if (now - lastVoiceProc < 150) return;       // 旧iPadの負荷軽減: 処理を間引く
-      if (now - lastManualAnchorAt < 500) return;  // 手動補正直後は音声で戻さない
+      if (now - lastVoiceProc < VOICE_THROTTLE_MS) return;      // 旧iPadの負荷軽減: 処理を間引く
+      if (now - lastManualAnchorAt < MANUAL_IGNORE_MS) return;  // 手動補正直後は音声で戻さない
       lastVoiceProc = now;
 
       const spoken = normalizeText(transcript);
-      if (spoken.length < MIN_MATCH_LEN) return; // 短すぎる断片は無視(MIN_MATCH_LENで緩さ調整)
+      if (spoken.length < MIN_MATCH_LEN) return; // 短すぎる断片は誤マッチしやすいので無視
 
       // 現在地の少し手前〜前方だけを探索窓にする(長文台本でも軽い & 言い直しに対応)
-      const behind = 40;   // 言い直し・小さな戻りを許容する後方幅
-      const ahead = 400;   // 飛びすぎ防止の前方幅
-      const hayStart = Math.max(0, voiceIndex - behind);
-      const hay = voiceNorm.slice(hayStart, Math.min(voiceNorm.length, voiceIndex + ahead));
+      const hayStart = Math.max(0, voiceIndex - SEARCH_BEHIND);
+      const hay = voiceNorm.slice(hayStart, Math.min(voiceNorm.length, voiceIndex + SEARCH_AHEAD));
 
-      // 末尾を長め→短めに。各候補の「採用可否」を選別時に判定し、採用候補が取れた長さで確定する。
-      // 採用可: 後退(=言い直し) / 近接の前進(jump<=MAX_NEAR_JUMP) / 長い一致(高確信, L>=CONFIDENT_LEN)。
-      // 読み間違い対策: 短い一致での大きな前方ジャンプは採用しない(=誤読/偶然一致は無視して現在地を保つ)。
+      // 末尾を長め→短めに試し、採用候補が取れた長さで確定する(より長い一致=高確信を優先)。
+      // 採用可: 後退(=言い直し) / 近接の前進 / 長い一致(高確信)。
+      // 前方ジャンプの可否は「飛ばした本文の文字数」で判定。見出しの飛ばしは除外されるので、
+      // 見出しを読まずに本文へ進んでもブロックされない(=引き戻されない)。
+      // 読み間違い対策: 短い一致での大きな前方ジャンプは採用しない(誤読/偶然一致は無視して現在地を保つ)。
       //   例:「具体的には」を先にある「物理的に」と読んでも飛ばない。続けて正しい語を読めば近接一致で再追従。
       let bestEnd = -1, bestScore = Infinity, bestLen = 0;
-      for (let L = Math.min(16, spoken.length); L >= MIN_MATCH_LEN; L--) {
+      for (let L = Math.min(MAX_MATCH_LEN, spoken.length); L >= MIN_MATCH_LEN; L--) {
         const needle = spoken.slice(-L);
         let from = 0, foundEligible = false;
         while (true) {
@@ -1024,8 +1101,6 @@
           if (rel === -1) break;
           const end = hayStart + rel + L;
           const diff = end - voiceIndex;
-          // 前方ジャンプの可否は「飛ばした本文の文字数」で判定。見出しの飛ばしは除外されるので、
-          // 見出しを読まずに本文へ進んでもブロックされない(=引き戻されない)。
           const matchStartPos = end - L;
           const bodyGap = matchStartPos > voiceIndex ? bodySkip(voiceIndex, matchStartPos) : 0;
           const eligible = bodyGap <= MAX_NEAR_JUMP || L >= CONFIDENT_LEN;
@@ -1036,7 +1111,7 @@
           }
           from = rel + 1;
         }
-        if (foundEligible) break; // 採用候補が取れたら確定(より長い=高確信を優先)
+        if (foundEligible) break;
       }
       if (bestEnd === -1) { stalledSinceAdvance = true; return; } // 一致せず停止(誤読語で起きる)
 
@@ -1052,22 +1127,11 @@
       const gap = matchStart - prevIndex;
       // 一致した区間は正しく読めた証拠なので赤を消す(言い直して正しく読み直すと赤が取れる)
       setMisread(matchStart, bestEnd, false);
-      // 誤読語で停止→先へ飛んだ隙間は読み間違いとして赤に
       if (stalledSinceAdvance && gap >= 1 && gap <= MISREAD_MAX) setMisread(prevIndex, matchStart, true);
       stalledSinceAdvance = false;
     }
 
-    // norm位置 (from, to] に含まれる文字spanの .misread を付与/除去する
-    function setMisread(from, to, on) {
-      for (let i = 0; i < voiceChars.length; i++) {
-        const p = voiceChars[i].normPos;
-        if (p <= from) continue;
-        if (p > to) break;
-        if (on && voiceChars[i].head) continue; // 見出しは読み飛ばしても赤くしない
-        voiceChars[i].span.classList.toggle('misread', on);
-      }
-    }
-
+    // ---------- 認識のライフサイクル ----------
     // 認識を動かすべき条件: ユーザーがONにしていて、かつ再生中(=一時停止中は止めて省電力)
     function shouldListen() { return voiceWantOn && isPlaying; }
 
@@ -1101,7 +1165,7 @@
         recognitionStarting = false;
         recognitionRunning = false;
         // iOS Safari等は勝手に止まるので、ONのままなら少し待って再開(間隔を空けてループ防止)
-        if (shouldListen()) scheduleVoiceRestart(300);
+        if (shouldListen()) scheduleVoiceRestart(RESTART_DELAY_MS);
       };
       r.onerror = (e) => {
         recognitionStarting = false;
@@ -1156,161 +1220,10 @@
       updateVoiceBtn();
     }
 
-    voiceBtn.addEventListener('click', () => {
-      if (voiceMode) stopVoice(); else startVoice();
-    });
-
-    if (!SR) {
-      voiceBtn.disabled = true;
-      voiceBtn.style.opacity = '0.4';
-      voiceBtn.style.cursor = 'not-allowed';
-      voiceBtn.title = 'この端末は音声認識に非対応です';
-    }
-
-    // ==================== Prompter Controls ====================
-    stopBtn.addEventListener('click', () => {
-      if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
-      isPlaying = false;
-      stopVoice();
-      editScreen.style.display = 'flex';
-      prompterScreen.style.display = 'none';
-    });
-
-    playBtn.addEventListener('click', togglePlay);
-
-    function togglePlay() {
-      isPlaying = !isPlaying;
-      updatePlayBtn();
-      if (isPlaying && !rafId) startAnimation();
-      if (!isPlaying && readingEl) readingEl.classList.remove('diverged'); // 停止中はオレンジを消す
-      syncVoiceRecognition(); // 一時停止/再開で認識も止める/再開する
-    }
-
-    function updatePlayBtn() {
-      playBtn.textContent = isPlaying ? '⏸ 一時停止' : '▶ 再生';
-    }
-
-    rewindBtn.addEventListener('click', () => {
-      scrollPos = Math.max(0, scrollPos - STEP_AMOUNT);
-      prompterWrapper.scrollTop = scrollPos;
-      anchorVoiceToScroll();
-    });
-
-    forwardBtn.addEventListener('click', () => {
-      const max = prompterWrapper.scrollHeight - prompterWrapper.clientHeight;
-      scrollPos = Math.min(max, scrollPos + STEP_AMOUNT);
-      prompterWrapper.scrollTop = scrollPos;
-      anchorVoiceToScroll();
-    });
-
-    function updateSpeedDisplay() { speedDisplay.textContent = speed; }
-    function updateFontDisplay()  { fontDisplay.textContent = fontSize; }
-
-    speedDownBtn.addEventListener('click', () => {
-      speed = Math.max(1, speed - 1);
-      updateSpeedDisplay();
-    });
-    speedUpBtn.addEventListener('click', () => {
-      speed = Math.min(20, speed + 1);
-      updateSpeedDisplay();
-    });
-
-    fontDownBtn.addEventListener('click', () => {
-      fontSize = Math.max(16, fontSize - 4);
-      prompterContent.style.fontSize = fontSize + 'px';
-      updateFontDisplay();
-    });
-    fontUpBtn.addEventListener('click', () => {
-      fontSize = Math.min(80, fontSize + 4);
-      prompterContent.style.fontSize = fontSize + 'px';
-      updateFontDisplay();
-    });
-
-    pMirrorHBtn.addEventListener('click', () => { mirrorH = !mirrorH; applyMirror(); });
-    pMirrorVBtn.addEventListener('click', () => { mirrorV = !mirrorV; applyMirror(); });
-
-    // ==================== Mouse Wheel ====================
-    prompterWrapper.addEventListener('wheel', (e) => {
-      e.preventDefault();
-      scrollPos += e.deltaY;
-      scrollPos = Math.max(0, scrollPos);
-      const max = prompterWrapper.scrollHeight - prompterWrapper.clientHeight;
-      scrollPos = Math.min(max, scrollPos);
-      prompterWrapper.scrollTop = scrollPos;
-      anchorVoiceToScroll();
-    }, { passive: false });
-
-    // ==================== Touch (tablet swipe) ====================
-    let touchStartY = 0;
-    prompterWrapper.addEventListener('touchstart', (e) => {
-      touchStartY = e.touches[0].clientY;
-    }, { passive: true });
-
-    prompterWrapper.addEventListener('touchmove', (e) => {
-      e.preventDefault();
-      const dy = touchStartY - e.touches[0].clientY;
-      scrollPos += dy * 1.5;
-      scrollPos = Math.max(0, scrollPos);
-      const max = prompterWrapper.scrollHeight - prompterWrapper.clientHeight;
-      scrollPos = Math.min(max, scrollPos);
-      prompterWrapper.scrollTop = scrollPos;
-      touchStartY = e.touches[0].clientY;
-      anchorVoiceToScroll();
-    }, { passive: false });
-
-    // ==================== Keyboard Shortcuts ====================
-    document.addEventListener('keydown', (e) => {
-      if (prompterScreen.style.display === 'none') return;
-
-      switch (e.key) {
-        case ' ':
-          e.preventDefault();
-          togglePlay();
-          break;
-
-        case 'ArrowLeft':
-        case 'ArrowUp':
-          e.preventDefault();
-          scrollPos = Math.max(0, scrollPos - STEP_AMOUNT);
-          prompterWrapper.scrollTop = scrollPos;
-          anchorVoiceToScroll();
-          break;
-
-        case 'ArrowRight':
-        case 'ArrowDown':
-          e.preventDefault();
-          {
-            const max = prompterWrapper.scrollHeight - prompterWrapper.clientHeight;
-            scrollPos = Math.min(max, scrollPos + STEP_AMOUNT);
-            prompterWrapper.scrollTop = scrollPos;
-            anchorVoiceToScroll();
-          }
-          break;
-
-        case '+':
-        case '=':
-          speed = Math.min(20, speed + 1);
-          updateSpeedDisplay();
-          break;
-
-        case '-':
-        case '_':
-          speed = Math.max(1, speed - 1);
-          updateSpeedDisplay();
-          break;
-      }
-    });
-
-    // ==================== クラウド同期(台本のMac↔iPad共有) ====================
+    // ==================== 8. クラウド同期(台本のMac↔iPad共有) ====================
     // Macで貼り付け→自動保存→iPadで開くと自動で読み込む。ログイン不要・本人専用の保存先。
-    // 保存先はリポジトリに平文で載せたくないため、実行時に組み立てる(難読化。秘匿ではない)。
-    const CLOUD_URL = atob('aHR0cHM6Ly9rdmRiLmlvLzd2YXFUNVRwaVlwem03aXc1ZTF5VEovc2NyaXB0');
-    const cloudSaveBtn = document.getElementById('cloudSaveBtn');
-    const cloudLoadBtn = document.getElementById('cloudLoadBtn');
-    const cloudStatus  = document.getElementById('cloudStatus');
-    let cloudSaveTimer = null;
-
     function setCloudStatus(msg) { cloudStatus.textContent = 'クラウド同期：' + msg; }
+
     function nowHM() {
       const d = new Date();
       return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
@@ -1351,19 +1264,98 @@
       }
     }
 
+    // ==================== 9. イベント接続・初期化 ====================
+    // --- 編集画面 ---
+    speedRange.addEventListener('input', () => setSpeed(parseInt(speedRange.value)));
+    fontRange.addEventListener('input', () => setFontSize(parseInt(fontRange.value)));
+    mirrorHBtn.addEventListener('click', () => setMirror(!mirrorH, mirrorV));
+    mirrorVBtn.addEventListener('click', () => setMirror(mirrorH, !mirrorV));
+    startBtn.addEventListener('click', startPrompter);
+
+    // --- プロンプター操作バー ---
+    stopBtn.addEventListener('click', stopPrompter);
+    playBtn.addEventListener('click', togglePlay);
+    rewindBtn.addEventListener('click', () => manualScrollBy(-STEP_AMOUNT));
+    forwardBtn.addEventListener('click', () => manualScrollBy(STEP_AMOUNT));
+    speedDownBtn.addEventListener('click', () => setSpeed(speed - 1));
+    speedUpBtn.addEventListener('click', () => setSpeed(speed + 1));
+    fontDownBtn.addEventListener('click', () => setFontSize(fontSize - FONT_STEP));
+    fontUpBtn.addEventListener('click', () => setFontSize(fontSize + FONT_STEP));
+    pMirrorHBtn.addEventListener('click', () => setMirror(!mirrorH, mirrorV));
+    pMirrorVBtn.addEventListener('click', () => setMirror(mirrorH, !mirrorV));
+    voiceBtn.addEventListener('click', () => { if (voiceMode) stopVoice(); else startVoice(); });
+
+    // --- ホイール・スワイプ ---
+    prompterWrapper.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      manualScrollBy(e.deltaY);
+    }, { passive: false });
+
+    prompterWrapper.addEventListener('touchstart', (e) => {
+      touchStartY = e.touches[0].clientY;
+    }, { passive: true });
+
+    prompterWrapper.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+      const y = e.touches[0].clientY;
+      manualScrollBy((touchStartY - y) * TOUCH_SCROLL_RATE);
+      touchStartY = y;
+    }, { passive: false });
+
+    // --- キーボード(プロンプター表示中のみ) ---
+    document.addEventListener('keydown', (e) => {
+      if (prompterScreen.style.display !== 'flex') return;
+      switch (e.key) {
+        case ' ':
+          e.preventDefault();
+          togglePlay();
+          break;
+        case 'ArrowLeft':
+        case 'ArrowUp':
+          e.preventDefault();
+          manualScrollBy(-STEP_AMOUNT);
+          break;
+        case 'ArrowRight':
+        case 'ArrowDown':
+          e.preventDefault();
+          manualScrollBy(STEP_AMOUNT);
+          break;
+        case '+':
+        case '=':
+          setSpeed(speed + 1);
+          break;
+        case '-':
+        case '_':
+          setSpeed(speed - 1);
+          break;
+      }
+    });
+
+    // --- ウィンドウ ---
+    window.addEventListener('resize', syncPrompterHeight);
+    window.addEventListener('orientationchange', () => setTimeout(syncPrompterHeight, 200));
+
+    // --- クラウド同期 ---
     cloudSaveBtn.addEventListener('click', () => saveToCloud(true));
     cloudLoadBtn.addEventListener('click', () => loadFromCloud(true));
-
     // 入力が止まったら自動保存(Macでそのまま貼れば勝手にクラウドへ)。
     // プログラムからの value 代入では input は発火しないので、自動取得が保存を誘発することはない。
     scriptInput.addEventListener('input', () => {
       clearTimeout(cloudSaveTimer);
       setCloudStatus('編集中…');
-      cloudSaveTimer = setTimeout(() => saveToCloud(false), 1200);
+      cloudSaveTimer = setTimeout(() => saveToCloud(false), CLOUD_SAVE_DEBOUNCE_MS);
     });
 
-    // 起動時に自動取得(iPadで開くと台本が入っている)
-    loadFromCloud(false);
+    // --- 初期化 ---
+    setSpeed(speed);       // 両画面の表示値をそろえる
+    setFontSize(fontSize);
+    if (!SR) {
+      voiceBtn.disabled = true;
+      voiceBtn.style.opacity = '0.4';
+      voiceBtn.style.cursor = 'not-allowed';
+      voiceBtn.title = 'この端末は音声認識に非対応です';
+    }
+    loadFromCloud(false);  // 起動時に自動取得(iPadで開くと台本が入っている)
   </script>
 </body>
 </html>
